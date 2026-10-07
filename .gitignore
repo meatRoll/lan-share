@@ -1,0 +1,23 @@
+# Local build state and binaries
+.gradle/
+.kotlin/
+**/build/
+*.apk
+*.aab
+local.properties
+.DS_Store
+
+# Signing material (never commit)
+*.jks
+*.keystore
+.env
+.env.*
+
+# Local discovery, received files and diagnostics
+*.log
+web/.discovery-state.json
+web/received/
+dist/
+# APKs downloaded from GitHub Releases / Actions
+release-downloads/
+__pycache__/
