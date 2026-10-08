@@ -1,3 +1,7 @@
+# Local release notes (never commit)
+/TEMP_*.md
+/local-notes/
+
 # Local build state and binaries
 .gradle/
 .kotlin/
