@@ -44,6 +44,8 @@ class TvMainActivity : Activity(), LanShareService.Listener {
     private val folderAccessRequestCode = 1207
     private val folderDocumentId = "primary:Download/LanShare"
     private val storagePermissionRequestCode = 43
+    private var awaitingAllFilesSettings = false
+    private var fileBrowserDialog: AlertDialog? = null
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
@@ -61,7 +63,50 @@ class TvMainActivity : Activity(), LanShareService.Listener {
         requestStoragePermission()
     }
 
-    override fun onDestroy() { service.stop(); super.onDestroy() }
+    override fun onResume() {
+        super.onResume()
+        if (awaitingAllFilesSettings) {
+            awaitingAllFilesSettings = false
+            val granted = hasAllFilesAccess()
+            browserLog("returned from all-files settings; granted=$granted")
+            Toast.makeText(this, if (granted) "所有文件访问已开启，请重新打开文件浏览器" else "未开启所有文件访问，仍只能读取系统允许的文件", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun hasAllFilesAccess(): Boolean = try {
+        Build.VERSION.SDK_INT >= 30 && Environment.isExternalStorageManager()
+    } catch (error: Exception) {
+        browserLog("all-files state error=${error.javaClass.simpleName}: ${error.message}")
+        false
+    }
+
+    private fun requestAllFilesAccess() {
+        AlertDialog.Builder(this).setTitle("所有文件访问")
+            .setMessage("此权限允许 LanShare 浏览和读取共享存储中的更多文件，包括其他应用创建的文档、日志和 APK。不会自动发送文件，部分受保护目录仍不可访问。请在系统页面手动开启；也可随时在系统设置中撤销。")
+            .setNegativeButton("取消", null)
+            .setPositiveButton("打开系统设置") { _, _ ->
+                val intents = listOf(
+                    Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName")),
+                    Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                )
+                var opened = false
+                for (intent in intents) {
+                    try {
+                        browserLog("opening all-files settings; action=${intent.action}; current=${hasAllFilesAccess()}")
+                        awaitingAllFilesSettings = true
+                        startActivity(intent)
+                        opened = true
+                        break
+                    } catch (error: Exception) {
+                        awaitingAllFilesSettings = false
+                        browserLog("all-files settings unavailable; action=${intent.action}; error=${error.javaClass.simpleName}: ${error.message}")
+                    }
+                }
+                if (!opened) Toast.makeText(this, "系统不支持此授权入口，无法通过此方式授予所有文件访问", Toast.LENGTH_LONG).show()
+            }.show()
+    }
+
+    override fun onDestroy() { fileBrowserDialog?.dismiss(); service.stop(); super.onDestroy() }
 
     private fun requestStoragePermission() {
         if (Build.VERSION.SDK_INT in 23..28 && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
@@ -218,6 +263,12 @@ class TvMainActivity : Activity(), LanShareService.Listener {
             Toast.makeText(this@TvMainActivity, if (enabled) "诊断日志已开启" else "诊断日志已关闭", Toast.LENGTH_SHORT).show()
         }
         box.addView(loggingToggle, LinearLayout.LayoutParams(-1, 54).apply { topMargin = 12 })
+        if (Build.VERSION.SDK_INT >= 30) {
+            box.addView(focusButton(if (hasAllFilesAccess()) "所有文件访问：已开启" else "所有文件访问：未开启", 14f, panelFocused) {
+                dialog.dismiss()
+                requestAllFilesAccess()
+            }, LinearLayout.LayoutParams(-1, 54).apply { topMargin = 10 })
+        }
         if (Logcat.isEnabled()) {
             box.addView(focusButton("发送诊断日志", 14f, panelFocused) { dialog.dismiss(); sendDiagnosticLog() }, LinearLayout.LayoutParams(-1, 58).apply { topMargin = 10 })
             box.addView(focusButton("清空诊断日志", 14f, panelFocused) { dialog.dismiss(); confirmClearLogs() }, LinearLayout.LayoutParams(-1, 58).apply { topMargin = 10 })
@@ -239,7 +290,6 @@ class TvMainActivity : Activity(), LanShareService.Listener {
     }
 
     private fun sendDiagnosticLog() {
-        val target = selected
         val publicLog = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "LanShare/lanshare.log")
         val source = publicLog.takeIf { it.isFile } ?: Logcat.privateLogFile()
         if (source == null) {
@@ -254,17 +304,13 @@ class TvMainActivity : Activity(), LanShareService.Listener {
             Toast.makeText(this, "无法读取诊断日志", Toast.LENGTH_LONG).show()
             return
         }
-        if (target == null) {
-            pendingLogSend = true
-            pendingLogFile = snapshot
-            status.text = "请选择中间栏的设备发送日志"
-            Toast.makeText(this, "请选择中间栏的设备", Toast.LENGTH_LONG).show()
-            return
-        }
-        pendingLogSend = false
-        status.text = "正在发送诊断日志…"
-        service.sendLocalFile(snapshot, target)
-        snapshot.deleteOnExit()
+        selected = null
+        pendingUris = emptyList()
+        pendingLogSend = true
+        pendingLogFile = snapshot
+        Logcat.d("send log", "snapshot queued; previous target cleared; waiting for explicit device selection")
+        status.text = "日志发送模式：请选择中间栏的设备"
+        Toast.makeText(this, "请点击一个附近设备发送日志", Toast.LENGTH_LONG).show()
     }
 
     private fun receivedDirectories(): List<File> = listOfNotNull(
@@ -472,13 +518,57 @@ class TvMainActivity : Activity(), LanShareService.Listener {
             Toast.makeText(this, "请先在右侧选择接收设备", Toast.LENGTH_LONG).show()
             return
         }
+        browserLog("picker opened; sdk=${Build.VERSION.SDK_INT}; manufacturer=${Build.MANUFACTURER}; target=${selected?.name}")
         showFileBrowser(Environment.getExternalStorageDirectory())
     }
 
+    private fun browserLog(message: String) {
+        try { Logcat.d("tv file browser", message) } catch (_: Exception) { }
+    }
+
+    private fun logBrowserStorageAccess() {
+        if (!Logcat.isEnabled()) return
+        try {
+            val permissions = listOf(
+                "android.permission.READ_EXTERNAL_STORAGE",
+                "android.permission.WRITE_EXTERNAL_STORAGE",
+                "android.permission.READ_MEDIA_IMAGES",
+                "android.permission.READ_MEDIA_VIDEO",
+                "android.permission.READ_MEDIA_AUDIO"
+            )
+            permissions.forEach { permission ->
+                try { browserLog("permission=$permission; granted=${checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED}") }
+                catch (error: Exception) { browserLog("permission=$permission; error=${error.javaClass.simpleName}") }
+            }
+            if (Build.VERSION.SDK_INT >= 30) browserLog("allFilesAccess=${Environment.isExternalStorageManager()}")
+            browserLog("package=$packageName; targetSdk=${applicationInfo.targetSdkVersion}; persistedUriPermissions=${contentResolver.persistedUriPermissions.joinToString { "${it.uri}; read=${it.isReadPermission}; write=${it.isWritePermission}" }}")
+        } catch (error: Exception) { browserLog("storage diagnostics failed; error=${error.javaClass.simpleName}: ${error.message}") }
+    }
+
     private fun showFileBrowser(directory: File) {
-        val entries = directory.listFiles()
-            ?.sortedWith(compareBy<File> { !it.isDirectory }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name })
-            .orEmpty()
+        fileBrowserDialog?.dismiss()
+        val started = System.currentTimeMillis()
+        val raw = try { directory.listFiles() } catch (error: Exception) {
+            browserLog("listFiles exception; path=${directory.absolutePath}; error=${error.javaClass.simpleName}: ${error.message}")
+            null
+        }
+        val entries = try {
+            raw?.sortedWith(compareBy<File> { !it.isDirectory }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }).orEmpty()
+        } catch (error: Exception) {
+            browserLog("sort failed; path=${directory.absolutePath}; error=${error.javaClass.simpleName}")
+            raw?.toList().orEmpty()
+        }
+        if (Logcat.isEnabled()) {
+            try {
+                logBrowserStorageAccess()
+                browserLog("directory=${directory.absolutePath}; exists=${directory.exists()}; isDirectory=${directory.isDirectory}; canRead=${directory.canRead()}; listFilesNull=${raw == null}; total=${entries.size}; shown=${minOf(200, entries.size)}; omitted=${maxOf(0, entries.size - 200)}; elapsedMs=${System.currentTimeMillis() - started}")
+                entries.forEachIndexed { index, entry ->
+                    try {
+                        browserLog("entry index=$index; shown=${index < 200}; name=${entry.name}; path=${entry.absolutePath}; directory=${entry.isDirectory}; file=${entry.isFile}; readable=${entry.canRead()}; hidden=${entry.isHidden}; bytes=${entry.length()}")
+                    } catch (error: Exception) { browserLog("entry index=$index; metadataError=${error.javaClass.simpleName}") }
+                }
+            } catch (error: Exception) { browserLog("directory metadataError=${error.javaClass.simpleName}") }
+        }
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(18, 0, 18, 0) }
         list.addView(TextView(this).apply { text = directory.absolutePath; textSize = 13f; setTextColor(muted); setPadding(0, 0, 0, 12) })
         directory.parentFile?.let { parent -> list.addView(fileBrowserRow("..  返回上级目录") { showFileBrowser(parent) }) }
@@ -487,8 +577,18 @@ class TvMainActivity : Activity(), LanShareService.Listener {
         } else entries.take(200).forEach { entry ->
             val label = if (entry.isDirectory) "[目录] ${entry.name}" else "${entry.name}  (${formatSize(entry.length())})"
             list.addView(fileBrowserRow(label) {
-                if (entry.isDirectory) showFileBrowser(entry)
-                else selected?.let { target -> status.text = "正在发送 ${entry.name}…"; service.sendLocalFile(entry, target) }
+                browserLog("clicked path=${entry.absolutePath}; target=${selected?.name}")
+                try {
+                    if (entry.isDirectory) showFileBrowser(entry)
+                    else selected?.let { target ->
+                        fileBrowserDialog?.dismiss()
+                        status.text = "正在发送 ${entry.name}…"
+                        service.sendLocalFile(entry, target)
+                    }
+                } catch (error: Exception) {
+                    browserLog("click failed; path=${entry.absolutePath}; error=${error.javaClass.simpleName}: ${error.message}")
+                    Toast.makeText(this, "无法打开文件或目录", Toast.LENGTH_LONG).show()
+                }
             })
         }
         val scroll = ScrollView(this).apply {
@@ -496,8 +596,11 @@ class TvMainActivity : Activity(), LanShareService.Listener {
             isFillViewport = true
             addView(list)
         }
-        AlertDialog.Builder(this).setTitle("选择要发送的文件").setView(scroll).setNegativeButton("关闭", null).show()
-        list.post { list.getChildAt(0)?.requestFocus() }
+        val dialog = AlertDialog.Builder(this).setTitle("选择要发送的文件").setView(scroll).setNegativeButton("关闭", null).create()
+        fileBrowserDialog = dialog
+        dialog.setOnDismissListener { if (fileBrowserDialog === dialog) fileBrowserDialog = null }
+        dialog.show()
+        list.post { if (dialog.isShowing) list.getChildAt(0)?.requestFocus() }
     }
 
     private fun fileBrowserRow(label: String, action: () -> Unit): TextView = TextView(this).apply {
