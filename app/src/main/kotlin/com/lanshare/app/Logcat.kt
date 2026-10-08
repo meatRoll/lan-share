@@ -20,6 +20,7 @@ object Logcat {
     private var logUri: Uri? = null
     private var initialized = false
     private var runtimeEnabled = false
+    private var storageReady = false
 
     fun init(context: Context) {
         synchronized(lock) {
@@ -27,8 +28,17 @@ object Logcat {
             appContext = context.applicationContext
             logFile = File(appContext.filesDir, FILE_NAME)
             runtimeEnabled = appContext.getSharedPreferences("logging", Context.MODE_PRIVATE)
-                .getBoolean("enabled", BuildConfig.LOGGING_ENABLED)
-            if (BuildConfig.LOGGING_ENABLED && Build.VERSION.SDK_INT >= 29) {
+                .getBoolean("enabled", false) && BuildConfig.LOGGING_ENABLED
+            initialized = true
+            if (runtimeEnabled) prepareStorage()
+        }
+        d("logging", "=== session started; version=${BuildConfig.VERSION_NAME}; publicUri=$logUri ===")
+    }
+
+    private fun prepareStorage() {
+        if (storageReady) return
+        storageReady = true
+        if (Build.VERSION.SDK_INT >= 29) {
                 try {
                     val resolver = appContext.contentResolver
                     val prefs = appContext.getSharedPreferences("logging", Context.MODE_PRIVATE)
@@ -62,15 +72,12 @@ object Logcat {
                     logUri?.let { prefs.edit().putString("uri", it.toString()).commit() }
                 } catch (error: Exception) { android.util.Log.e("LanShare/logging", "Public log unavailable; using private file", error) }
             }
-            initialized = true
             val previous = Thread.getDefaultUncaughtExceptionHandler()
             Thread.setDefaultUncaughtExceptionHandler { thread, error ->
                 e("crash ${thread.name}", error)
                 if (previous != null) previous.uncaughtException(thread, error)
                 else { android.os.Process.killProcess(android.os.Process.myPid()); kotlin.system.exitProcess(1) }
             }
-        }
-        d("logging", "=== session started; version=${BuildConfig.VERSION_NAME}; publicUri=$logUri ===")
     }
 
     fun isEnabled(): Boolean = synchronized(lock) { initialized && BuildConfig.LOGGING_ENABLED && runtimeEnabled }
@@ -82,7 +89,10 @@ object Logcat {
         }
         runtimeEnabled = enabled
         appContext.getSharedPreferences("logging", Context.MODE_PRIVATE).edit().putBoolean("enabled", enabled).apply()
-        if (enabled) write("DEBUG", "logging", "=== logging enabled; version=${BuildConfig.VERSION_NAME} ===")
+        if (enabled) {
+            prepareStorage()
+            write("DEBUG", "logging", "=== logging enabled; version=${BuildConfig.VERSION_NAME} ===")
+        }
         enabled
     }
 
@@ -147,6 +157,7 @@ object Logcat {
         if (!initialized || !runtimeEnabled) return
         val line = "${SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(Date())} [$level] [$tag] $message\n"
         synchronized(lock) {
+            if (!runtimeEnabled) return
             // Keep a single private canonical log as a fallback; never rotate or truncate either file.
             try { FileOutputStream(logFile!!, true).use { it.write(line.toByteArray()) } }
             catch (error: Exception) { android.util.Log.e("LanShare/logging", "Private log write failed", error) }

@@ -50,7 +50,7 @@ node web/discovery.test.js
 gradle :app:compilePhoneReleaseKotlin :app:compileTvLegacyReleaseKotlin :app:compileTvModernReleaseKotlin -PenableLogs=false
 ```
 
-源码编译不需要正式签名密钥。需要调试日志时可在源码编译命令中显式改为 `-PenableLogs=true`；不要据此发布诊断开启的正式包，不覆盖版本配置，也不执行本地 `assemble` 或 `bundle` 打包。
+源码编译不需要正式签名密钥。`-PenableLogs=false` 编译时彻底禁用诊断能力。正式 CI 和可选诊断测试使用 `-PenableLogs=true`，运行时首次仍默认关闭，须用户主动开启；不覆盖版本配置，也不执行本地 `assemble` 或 `bundle` 打包。
 
 ## 提交约定
 

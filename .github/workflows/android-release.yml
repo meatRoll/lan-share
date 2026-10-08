@@ -65,7 +65,7 @@ jobs:
           LANSHARE_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           LANSHARE_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           LANSHARE_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: gradle '${{ matrix.task }}' -PenableLogs=false
+        run: gradle '${{ matrix.task }}' -PenableLogs=true
       - name: Name APK
         run: |
           mkdir -p dist

@@ -7,8 +7,8 @@ dependencies {
     implementation("org.jetbrains.kotlin:kotlin-stdlib:2.0.21")
 }
 
-// Development builds pass -PenableLogs=true; formal release builds default to logging off.
-val enableLogs = providers.gradleProperty("enableLogs").map { it.toBoolean() }.orElse(false)
+// Controls diagnostic capability, not its initial state. Runtime diagnostics default OFF.
+val enableLogs = providers.gradleProperty("enableLogs").map { it.toBoolean() }.orElse(true)
 
 android {
     namespace = "com.lanshare.app"
