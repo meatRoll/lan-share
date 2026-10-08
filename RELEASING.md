@@ -2,7 +2,9 @@
 
 ## 一次性准备
 
-发布仓库以本地 Git 远端配置为准。提交身份按项目维护规范核对并沿用仓库历史中已确认的身份，不修改全局配置。上传前检查 Git 忽略规则，不要上传临时记录、临时文件、历史日志、APK、签名密钥、Web 接收文件或本机发现状态。
+构建与发布流程集中维护于本文件，使用说明见 [README](README.md)，源码编译与测试见 [开发指南](CONTRIBUTING.md)。
+
+仓库：<https://github.com/meatRoll/lan-share>。上传前检查 `.gitignore`，不要上传本地临时记录、历史日志、APK、签名密钥、Web 接收文件或本机发现状态。
 
 1. 创建并妥善备份正式 Android 签名密钥，不使用 debug 密钥。三个平台可以使用同一正式密钥。
 2. 在 GitHub 仓库 Settings → Secrets and variables → Actions 配置：
@@ -13,7 +15,7 @@
 3. 使用 `main` 或 `master` 发布分支；其他分支名需修改工作流。
 4. 工作流需获准使用 `contents: write` 创建 Release。Secrets 不应出现在日志或仓库中。
 
-签名与测试版不同，正式版不能直接覆盖 debug 版。用户已同意卸载测试版后安装；卸载可能删除应用设置/私有文件，必要时先备份。
+正式签名与 debug 测试签名不同，通常不能直接覆盖安装。切换签名前应确认迁移方式；如需卸载重装，先提示备份设置和私有文件。
 
 ## 触发规则
 
@@ -26,9 +28,11 @@
 - 同一个 push 包含多提交时，对比 push 前后，不只比较 HEAD 的父提交。
 - Web 没有 Android APK，不参与此矩阵。
 
+工作流也支持在 GitHub Actions 页面使用 `workflow_dispatch` 手动运行。当前实现将手动运行视为没有旧版本基线，会构建所选分支的全部三个平台，即使版本号没有变化。正常发布优先通过版本变更触发 push；手动运行仅用于明确需要的补建或重试，避免为未变更平台重复上传。
+
 每个平台生成独立 GitHub Release，标签例如 `tvModern-v0.5.12`，上传正式签名 APK，同时保存 Actions artifact。重跑同一工作流会复用 Release 并覆盖同名资产。
 
-版本策略见 `AGENTS.md`。无需本地 assemble，也不要把 APK 加入 Git。
+版本策略见 [AGENTS.md](AGENTS.md)。无需本地 assemble，也不要把 APK 加入 Git。
 
 ## 下载构建产物
 
@@ -36,18 +40,10 @@
 
 ## 发布验收
 
-工作流构建成功不代表发布验收完成。发布前按 `RELEASE_CHECKLIST.md` 检查，并在对应版本的发布记录或 PR 中记录验证结果、待确认事项和用户决策；未执行的检查不得标记通过。
+工作流构建成功不代表发布验收完成。发布前按 [正式发布验收清单](RELEASE_CHECKLIST.md) 检查，并在对应版本的发布记录或 PR 中记录验证结果、待确认事项和用户决策；未执行的检查不得标记通过。
 
 当前 CI 用 `-PenableLogs=false` 关闭诊断。该编译开关不能替代日志初始化、崩溃处理、诊断 UI 和导出流程的审查；是否保留为默认关闭、用户主动启用的正式诊断功能，仍需明确决策。不要在未验收时将版本变更推送至发布分支，因为构建成功后会自动创建 Release。
 
 本地临时笔记不属于发布文档，不得提交；其中长期有效的要求应整理到正式清单，不保留本机地址、过时版本号或临时测试包记录。
 
-本地验证可以运行：
-
-```sh
-python3 scripts/test_release_matrix.py
-node web/ui.test.js
-node web/receive-tcp.test.js
-node web/discovery.test.js
-# 使用本机 Gradle 8.9 执行 compile...Kotlin，而非 assemble
-```
+本地源码编译与自动测试命令见 [开发指南](CONTRIBUTING.md)，不在此重复维护。

@@ -1,15 +1,63 @@
 # LanShare Web Desktop
 
-This is a standalone browser UI plus a local Node.js bridge. The bridge listens for LanShare Android/TV UDP discovery packets and proxies HTTP file operations to the selected device.
+电脑端由浏览器界面和本地 Node.js 桥接服务组成。浏览器不直接访问 UDP；桥接服务负责局域网发现、向 Android/TV 代理 HTTP 请求，以及通过 TCP 接收文件。项目概览和网络安全要求见 [根目录 README](../README.md)。
 
-Start it on a computer with Node.js 18+:
+## 启动与使用
 
-```bash
-node bridge.js
+需要 Node.js 18+ 和现代浏览器，无需安装 npm 依赖。在仓库根目录执行：
+
+```sh
+node web/bridge.js
 ```
 
-Open `http://127.0.0.1:45880` in the browser. Keep LanShare open on the phone or TV and connect both devices to the same Wi-Fi.
+如果当前目录是 `web/`，使用 `node bridge.js`。打开 <http://127.0.0.1:45880>，保持桥接进程、浏览器页面和手机/TV 上的 LanShare 运行。
 
-Optional diagnostics are appended to `~/Downloads/LanShare/lanshare-web.log`. Logging is disabled by default. Enable it explicitly with `LANSHARE_WEB_LOG=true node bridge.js`; use `LANSHARE_WEB_LOG_PATH=/path/to/lanshare-web.log` to override the path. The log records bridge startup, discovery, HTTP/proxy requests, uploads, downloads, TCP receiving, and browser errors, but not file contents.
+- 电脑发送：选择发现的 Android/TV 设备，再选择或拖入文件，由目标设备确认接收。
+- 电脑接收：在手机或 TV 中选择 `Web Desktop`，浏览器显示接收请求后选择接收或拒绝；请求在 25 秒后过期。
+- 已接收文件：列表显示电脑接收目录中的文件，支持下载和打开位置；默认目录为 `~/Downloads/LanShare`，重启服务会重新读取目录。
 
-The browser never accesses LAN UDP directly; only the local bridge does. Android/TV devices expose the file API on port `45888`.
+不能直接打开 `index.html` 代替 Node.js 服务。当前浏览器发送流程面向 Android/TV，不支持将另一台 Web Desktop 作为发送目标。“打开位置”调用 macOS 的 `open -R`，其他系统请自行打开接收目录；这不影响文件接收与浏览器下载。
+
+## 配置
+
+| 环境变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `PORT` | `45880` | 浏览器界面和本地 HTTP API 端口，仅监听 `127.0.0.1` |
+| `TCP_PORT` | `45881` | 电脑接收端口，监听 `0.0.0.0`，并在发现消息中公布 |
+| `LANSHARE_RECEIVED_DIR` | `~/Downloads/LanShare` | 电脑接收目录，建议使用绝对路径 |
+| `LANSHARE_WEB_LOG` | `false` | 显式启用诊断日志，可用 `true`、`1`、`yes` 或 `on` |
+| `LANSHARE_WEB_LOG_PATH` | `~/Downloads/LanShare/lanshare-web.log` | 日志路径，独立于接收目录配置 |
+
+例如，在 macOS/Linux shell 中更改接收目录和界面端口：
+
+```sh
+LANSHARE_RECEIVED_DIR="$HOME/Downloads/LanShare" PORT=45890 node web/bridge.js
+```
+
+使用更改后的端口访问 `http://127.0.0.1:45890`。停止服务使用 `Ctrl+C`。同一电脑不应同时运行多个桥接实例，否则固定的 UDP 发现端口可能冲突。
+
+## 网络与存储限制
+
+发现使用 UDP `45454`；电脑向 Android/TV 发送文件时访问设备 TCP `45888`，电脑接收使用 `TCP_PORT`。防火墙需允许对应局域网通信，不要将这些服务暴露到公网。协议未提供身份认证或 TLS 加密，只应在可信网络使用。
+
+发现使用广播和已知 IPv4 地址单播查询，已知地址和电脑身份保存在 `web/.discovery-state.json`。该文件是被 Git 忽略的本地状态，不应发布；删除会影响身份和已知地址复用。跨 AP 且广播隔离时，全新设备不一定能互相发现。
+
+文件名会过滤路径分隔符和不安全字符。当前接收完成时同名文件会被替换；如需保留旧文件，先改名或备份。接收目录应专供 LanShare 使用，服务启动时会将目录中的普通文件纳入列表，避免放入不希望在界面显示的私密文件。
+
+## 可选诊断
+
+日志默认关闭。临时排查时显式启用：
+
+```sh
+LANSHARE_WEB_LOG=true node web/bridge.js
+```
+
+日志会追加记录启动、设备发现、HTTP/代理请求、传输和浏览器错误，不记录文件内容，但可能包含地址、设备或文件名及异常堆栈。分享日志前检查隐私信息，排查结束后停止进程并去掉开关重新启动。
+
+修改接收目录不会自动修改日志路径；可单独使用 `LANSHARE_WEB_LOG_PATH` 指定。历史日志不会自动删除，当前日志没有轮转或大小限制。如果日志位于接收目录，可能出现在文件列表中。
+
+`tv-log-receiver.js` 是专用 TV 诊断接收脚本，不是本服务的组成部分，正常使用无需启动它。
+
+## 开发文档
+
+源码编译与回归测试见 [开发指南](../CONTRIBUTING.md)，正式发布要求见 [发布验收清单](../RELEASE_CHECKLIST.md)。
