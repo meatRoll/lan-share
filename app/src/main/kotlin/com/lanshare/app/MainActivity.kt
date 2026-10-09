@@ -42,6 +42,7 @@ class MainActivity : Activity(), LanShareService.Listener {
     private val fileManagerReturnNotificationId = 1208
     private val fileManagerReturnChannel = "file_manager_return_v2"
     private val notificationPermissionRequestCode = 42
+    private val discoveryQrRequestCode = 7302
 
     override fun onStart() {
         super.onStart()
@@ -425,7 +426,13 @@ class MainActivity : Activity(), LanShareService.Listener {
                     DiscoveryNetworkSettings.show(this@MainActivity, service, false)
                 }
             }, LinearLayout.LayoutParams(-1, 52.dp()).apply { topMargin = 12.dp() })
-            addView(TextView(this@MainActivity).apply { text = "版本：${BuildConfig.VERSION_NAME}"; textSize = 12f; setTextColor(muted) })
+            addView(button("显示发现网段二维码", panel, Color.WHITE).apply {
+                setOnClickListener { settingsDialog.dismiss(); DiscoveryNetworkSettings.showQr(this@MainActivity) }
+            }, LinearLayout.LayoutParams(-1, 52.dp()).apply { topMargin = 12.dp() })
+            addView(button("扫描网段二维码", panel, Color.WHITE).apply {
+                setOnClickListener { settingsDialog.dismiss(); DiscoveryNetworkSettings.scan(this@MainActivity, discoveryQrRequestCode) }
+            }, LinearLayout.LayoutParams(-1, 52.dp()).apply { topMargin = 12.dp() })
+            addView(TextView(this@MainActivity).apply { text = "版本：${BuildConfig.VERSION_NAME}"; setTextColor(muted); textSize = 12f })
             addView(TextView(this@MainActivity).apply { text = "日志文件：${Logcat.logPath()}"; setTextColor(muted); textSize = 11f; setPadding(0, 16, 0, 0) })
             val loggingToggle = button(if (Logcat.isEnabled()) "诊断日志：开启" else "诊断日志：关闭", panel, Color.WHITE).apply {
                 isFocusable = true
@@ -526,6 +533,29 @@ class MainActivity : Activity(), LanShareService.Listener {
                         Logcat.e("open location", error)
                     }
                 }
+            }
+            return
+        }
+        if (requestCode == discoveryQrRequestCode && resultCode == RESULT_OK) {
+            val scanned = data?.getStringExtra(DiscoveryQr.RESULT_KEY)
+            if (scanned != null) {
+                try {
+                    val imported = DiscoveryNetworks.parse(scanned).joinToString("\n") { it.cidr }
+                    require(imported.isNotEmpty()) { "二维码没有可导入的网段" }
+                    AlertDialog.Builder(this).setTitle("导入发现网段")
+                        .setMessage("将以下网段合并到现有配置：\n$imported")
+                        .setNegativeButton("取消", null)
+                        .setPositiveButton("合并并搜索") { _, _ ->
+                            try {
+                                val prefs = getSharedPreferences("settings", MODE_PRIVATE)
+                                val merged = DiscoveryNetworks.parse(prefs.getString("discovery_networks", "").orEmpty() + "\n" + imported)
+                                    .joinToString("\n") { it.cidr }
+                                prefs.edit().putString("discovery_networks", merged).apply()
+                                service.updateDiscoveryNetworks()
+                                Toast.makeText(this, "已导入并搜索发现网段", Toast.LENGTH_LONG).show()
+                            } catch (error: IllegalArgumentException) { Toast.makeText(this, error.message, Toast.LENGTH_LONG).show() }
+                        }.show()
+                } catch (error: IllegalArgumentException) { Toast.makeText(this, error.message, Toast.LENGTH_LONG).show() }
             }
             return
         }

@@ -153,6 +153,8 @@ async function loadNetworkSettings() {
     savedNetworks = settings.networks || '';
     $('#currentNetworks').textContent = currentNetworks.join(' · ') || '未连接 IPv4 网络';
     $('#currentNetworks').disabled = !currentNetworks.length;
+    const qrNetworks = savedNetworks || currentNetworks.join('\n');
+    $('#networkQr').src = qrNetworks ? `/api/discovery/qr.svg?networks=${encodeURIComponent(qrNetworks)}` : '';
   } catch (error) { $('#currentNetworks').textContent = error.message; }
 }
 $('#currentNetworks').onclick = async () => {
@@ -160,6 +162,18 @@ $('#currentNetworks').onclick = async () => {
     await navigator.clipboard.writeText(currentNetworks.join('\n'));
     status.textContent = '当前网段已复制';
   } catch (_) { status.textContent = '无法访问剪贴板，请手动复制显示的网段'; }
+};
+$('#currentNetworkQr').onclick = async () => {
+  await loadNetworkSettings();
+  if (!currentNetworks.length) { status.textContent = '当前没有可显示的 IPv4 网段'; return; }
+  $('#currentQrImage').src = `/api/discovery/qr.svg?networks=${encodeURIComponent(currentNetworks.join('\n'))}`;
+  $('#currentQrText').textContent = currentNetworks.join('\n');
+  $('#currentQrDialog').showModal();
+};
+$('#closeCurrentQr').onclick = () => $('#currentQrDialog').close();
+$('#networkInput').oninput = () => {
+  const value = $('#networkInput').value.trim();
+  $('#networkQr').src = value ? `/api/discovery/qr.svg?networks=${encodeURIComponent(value)}` : '';
 };
 $('#settings').onclick = async () => {
   await loadNetworkSettings();
@@ -182,6 +196,7 @@ $('#networkForm').onsubmit = async event => {
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || '保存失败');
     savedNetworks = result.networks;
+    $('#networkQr').src = savedNetworks ? `/api/discovery/qr.svg?networks=${encodeURIComponent(savedNetworks)}` : '';
     $('#networkSettings').close();
     status.textContent = '发现网段已保存，正在搜索';
     await loadDevices();

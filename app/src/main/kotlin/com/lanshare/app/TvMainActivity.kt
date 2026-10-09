@@ -269,6 +269,9 @@ class TvMainActivity : Activity(), LanShareService.Listener {
             dialog.dismiss()
             DiscoveryNetworkSettings.show(this, service, true)
         }, LinearLayout.LayoutParams(-1, 58).apply { topMargin = 12 })
+        box.addView(focusButton("显示发现网段二维码", 14f, panelFocused) {
+            DiscoveryNetworkSettings.showQr(this, tv = true)
+        }, LinearLayout.LayoutParams(-1, 58).apply { topMargin = 12 })
         box.addView(TextView(this).apply { text = "版本：${BuildConfig.VERSION_NAME}"; textSize = 12f; setTextColor(muted) })
         lateinit var loggingToggle: TextView
         loggingToggle = focusButton(if (Logcat.isEnabled()) "诊断日志：开启" else "诊断日志：关闭", 14f, panelFocused) {

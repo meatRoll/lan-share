@@ -7,6 +7,8 @@ const path = require('path');
 const { URL } = require('url');
 const { execFile } = require('child_process');
 const discoveryNetworks = require('./discovery-networks');
+const QRCode = require('./vendor/qrcode');
+const QRLevels = require('./vendor/qrcode/QRErrorCorrectLevel');
 
 const WEB_PORT = Number(process.env.PORT || 45880);
 const TCP_PORT = Number(process.env.TCP_PORT || 45881);
@@ -143,6 +145,20 @@ function discover() {
   });
   setInterval(() => { for (const [id, d] of devices) if (Date.now() - d.seen > 10000) devices.delete(id); }, 3000);
 }
+function discoveryQrSvg(networks) {
+  networks = discoveryNetworks.parse(networks).map(net => net.cidr).join('\n');
+  if (!networks) throw new Error('没有可分享的网段');
+  if (networks.length > 1800) throw new Error('网段过多，请分批分享二维码');
+  const qr = new QRCode(0, QRLevels.M);
+  qr.addData(`LANSHARE|NETWORKS|${networks.trim()}`);
+  qr.make();
+  const count = qr.getModuleCount();
+  const quiet = 4;
+  const size = count + quiet * 2;
+  const paths = [];
+  for (let row = 0; row < count; row++) for (let col = 0; col < count; col++) if (qr.isDark(row, col)) paths.push(`M${col + quiet} ${row + quiet}h1v1h-1z`);
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" role="img" aria-label="发现网段二维码"><rect width="100%" height="100%" fill="#f5f7ef"/><path d="${paths.join('')}" fill="#10120f"/></svg>`;
+}
 function saveNetworkSettings(req, res) {
   let body = '';
   let tooLarge = false;
@@ -201,6 +217,15 @@ function handler(req, res) {
     if (!pending) return json(res, 404, { error: '请求已过期' });
     pending.finish(decision[2] === 'accept');
     return json(res, 200, { ok: true });
+  }
+  if (url.pathname === '/api/discovery/qr.svg' && req.method === 'GET') {
+    try {
+      const requested = url.searchParams.get('networks') || configuredNetworks.map(net => net.cidr).join('\n') || discoveryNetworks.localSubnets(lanInterfaces()).join('\n');
+      const networks = discoveryNetworks.parse(requested).map(net => net.cidr).join('\n');
+      const svg = Buffer.from(discoveryQrSvg(networks));
+      res.writeHead(200, { 'Content-Type': 'image/svg+xml; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Length': svg.length });
+      return res.end(svg);
+    } catch (error) { return json(res, 400, { error: error.message }); }
   }
   if (url.pathname === '/api/discovery/settings' && req.method === 'GET') return json(res, 200, {
     currentNetworks: discoveryNetworks.localSubnets(lanInterfaces()),

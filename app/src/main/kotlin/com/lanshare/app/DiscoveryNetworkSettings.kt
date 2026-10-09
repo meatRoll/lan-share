@@ -4,6 +4,7 @@ import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.graphics.Color
 import android.text.InputType
 import android.view.Gravity
@@ -33,6 +34,36 @@ object DiscoveryNetworkSettings {
         }
     }
 
+    fun showQr(context: Context, networks: String? = null, tv: Boolean = false) {
+        val qrNetworks = networks ?: DiscoveryNetworks.localSubnets().joinToString("\n") { it.cidr }
+        if (qrNetworks.isBlank()) {
+            Toast.makeText(context, "当前没有可显示的 IPv4 网段", Toast.LENGTH_LONG).show()
+            return
+        }
+        val bitmap = try { DiscoveryQr.bitmap(qrNetworks) } catch (error: IllegalArgumentException) {
+            Toast.makeText(context, error.message ?: "无法生成网段二维码", Toast.LENGTH_LONG).show()
+            return
+        }
+        val box = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(20, 8, 20, 8) }
+        box.addView(ImageView(context).apply {
+            setImageBitmap(bitmap)
+            adjustViewBounds = true
+            contentDescription = "发现网段二维码"
+        }, LinearLayout.LayoutParams(-1, 420))
+        box.addView(TextView(context).apply {
+            text = "扫码导入的网段：\n$qrNetworks"
+            gravity = Gravity.CENTER
+            setTextColor(Color.DKGRAY)
+            setPadding(0, 12, 0, 0)
+        })
+        AlertDialog.Builder(context).setTitle("发现网段二维码").setView(ScrollView(context).apply { addView(box) })
+            .setPositiveButton("关闭", null).show()
+    }
+
+    fun scan(context: Context, requestCode: Int) {
+        (context as? android.app.Activity)?.startActivityForResult(Intent(context, DiscoveryQrScanActivity::class.java), requestCode)
+            ?: context.startActivity(Intent(context, DiscoveryQrScanActivity::class.java))
+    }
     fun show(context: Context, service: LanShareService, tv: Boolean) {
         val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
         val box = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; setPadding(28, 12, 28, 12) }
@@ -56,6 +87,10 @@ object DiscoveryNetworkSettings {
             }
         }
         box.addView(addCurrent)
+        box.addView(Button(context).apply {
+            text = "显示填写网段的二维码"
+            setOnClickListener { showQr(context, input.text.toString(), tv) }
+        })
         val dialog = AlertDialog.Builder(context).setTitle("发现网段")
             .setView(ScrollView(context).apply { addView(box) })
             .setNegativeButton("取消", null).setPositiveButton("保存并搜索", null).create()
