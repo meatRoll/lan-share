@@ -29,7 +29,8 @@ log('INFO', `session started; webPort=${WEB_PORT}; tcpPort=${TCP_PORT}; received
 const received = new Map();
 for (const name of fs.readdirSync(receivedDir)) {
   const file = path.join(receivedDir, name);
-  if (fs.statSync(file).isFile()) received.set(name, { name, size: fs.statSync(file).size, path: file });
+  const stat = fs.statSync(file);
+  if (stat.isFile()) received.set(name, { name, size: stat.size, path: file, receivedAt: stat.mtimeMs });
 }
 const MAGIC = 'LANSHARE';
 const devices = new Map();
@@ -234,7 +235,7 @@ function handler(req, res) {
   if (url.pathname === '/api/discovery/settings' && req.method === 'POST') return saveNetworkSettings(req, res);
   if (url.pathname === '/api/discovery/refresh' && req.method === 'POST') { sendDiscovery(); startNetworkScan(); return json(res, 200, { ok: true }); }
   if (url.pathname === '/api/devices') return json(res, 200, [...devices.values()].map(({ seen, ...device }) => device));
-  if (url.pathname === '/api/desktop/files') return json(res, 200, [...received.values()].map(file => ({ name: file.name, size: file.size, url: `/desktop-download/${encodeURIComponent(file.name)}`, locateUrl: `/desktop-locate/${encodeURIComponent(file.name)}` })));
+  if (url.pathname === '/api/desktop/files') return json(res, 200, [...received.values()].sort((a, b) => b.receivedAt - a.receivedAt).map(file => ({ name: file.name, size: file.size, url: `/desktop-download/${encodeURIComponent(file.name)}`, locateUrl: `/desktop-locate/${encodeURIComponent(file.name)}` })));
   if (url.pathname.startsWith('/desktop-locate/')) return locateDesktopFile(res, decodeURIComponent(url.pathname.slice('/desktop-locate/'.length)));
   if (url.pathname === '/desktop-upload' && req.method === 'POST') return uploadLocal(req, res);
   if (url.pathname.startsWith('/desktop-download/')) return downloadLocal(res, decodeURIComponent(url.pathname.slice('/desktop-download/'.length)));
@@ -304,7 +305,7 @@ function receiveTcp(socket) {
             socket.destroy();
             return;
           }
-          received.set(name, { name, size: total, path: file });
+          received.set(name, { name, size: total, path: file, receivedAt: fs.statSync(file).mtimeMs });
           if (typeof log === 'function') log('INFO', `received file name=${name}; size=${total}; host=${socket.remoteAddress}`); else console.log(`Received ${name}: ${total} bytes`);
           socket.end('DONE\n');
         });
@@ -336,7 +337,7 @@ function receiveTcp(socket) {
 discover(); setInterval(sendDiscovery, 3000); sendDiscovery();
 http.createServer(handler).listen(WEB_PORT, '127.0.0.1', () => console.log(`LanShare Web Desktop: http://127.0.0.1:${WEB_PORT}`));
 net.createServer({ allowHalfOpen: true }, receiveTcp).listen(TCP_PORT, '0.0.0.0', () => console.log(`LanShare desktop receiver: TCP ${TCP_PORT}`));
-function uploadLocal(req, res) { const name = safeName(decodeURIComponent(req.headers['x-filename'] || 'file')); const file = path.join(receivedDir, name); const output = fs.createWriteStream(file); let size = 0; log('INFO', `desktop upload started name=${name}; host=${req.socket.remoteAddress}`); req.on('data', chunk => { size += chunk.length; output.write(chunk); }); req.on('end', () => output.end(() => { received.set(name, { name, size, path: file }); log('INFO', `desktop upload saved name=${name}; size=${size}`); json(res, 201, { name, size }); })); req.on('error', error => log('ERROR', `desktop upload request failed name=${name}`, error)); }
+function uploadLocal(req, res) { const name = safeName(decodeURIComponent(req.headers['x-filename'] || 'file')); const file = path.join(receivedDir, name); const output = fs.createWriteStream(file); let size = 0; log('INFO', `desktop upload started name=${name}; host=${req.socket.remoteAddress}`); req.on('data', chunk => { size += chunk.length; output.write(chunk); }); req.on('end', () => output.end(() => { received.set(name, { name, size, path: file, receivedAt: fs.statSync(file).mtimeMs }); log('INFO', `desktop upload saved name=${name}; size=${size}`); json(res, 201, { name, size }); })); req.on('error', error => log('ERROR', `desktop upload request failed name=${name}`, error)); }
 function receiveClientLog(req, res) {
   let body = '';
   req.setEncoding('utf8');
