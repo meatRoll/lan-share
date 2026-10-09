@@ -249,6 +249,15 @@ function safeName(value) {
   const cleaned = value.replace(/[\p{Cc}\p{Cf}\\/:*?"<>|]/gu, '_').trim().replace(/\.+$/u, '');
   return Array.from(cleaned).slice(0, 120).join('').replace(/[ .]+$/u, '') || 'file';
 }
+function availableFileName(name) {
+  const parsed = path.parse(name);
+  let candidate = name;
+  let index = 1;
+  while (fs.existsSync(path.join(receivedDir, candidate)) || received.has(candidate)) {
+    candidate = `${parsed.name} (${index++})${parsed.ext}`;
+  }
+  return candidate;
+}
 function contentDisposition(name) {
   const fallback = safeName(name).replace(/[^a-zA-Z0-9._ -]/g, '_');
   const encoded = encodeURIComponent(name).replace(/['()*]/g, char => '%' + char.charCodeAt(0).toString(16).toUpperCase());
@@ -298,15 +307,17 @@ function receiveTcp(socket) {
       if (finished) return;
       finished = true;
       output.end(() => {
-        fs.rename(temporary, file, error => {
+        const finalName = availableFileName(name);
+        const finalFile = path.join(receivedDir, finalName);
+        fs.rename(temporary, finalFile, error => {
           if (error) {
             log('ERROR', 'tcp save failed', error);
             fs.rm(temporary, { force: true }, () => {});
             socket.destroy();
             return;
           }
-          received.set(name, { name, size: total, path: file, receivedAt: fs.statSync(file).mtimeMs });
-          if (typeof log === 'function') log('INFO', `received file name=${name}; size=${total}; host=${socket.remoteAddress}`); else console.log(`Received ${name}: ${total} bytes`);
+          received.set(finalName, { name: finalName, size: total, path: finalFile, receivedAt: fs.statSync(finalFile).mtimeMs });
+          if (typeof log === 'function') log('INFO', `received file name=${finalName}; requested=${name}; size=${total}; host=${socket.remoteAddress}`); else console.log(`Received ${finalName}: ${total} bytes`);
           socket.end('DONE\n');
         });
       });
@@ -337,7 +348,25 @@ function receiveTcp(socket) {
 discover(); setInterval(sendDiscovery, 3000); sendDiscovery();
 http.createServer(handler).listen(WEB_PORT, '127.0.0.1', () => console.log(`LanShare Web Desktop: http://127.0.0.1:${WEB_PORT}`));
 net.createServer({ allowHalfOpen: true }, receiveTcp).listen(TCP_PORT, '0.0.0.0', () => console.log(`LanShare desktop receiver: TCP ${TCP_PORT}`));
-function uploadLocal(req, res) { const name = safeName(decodeURIComponent(req.headers['x-filename'] || 'file')); const file = path.join(receivedDir, name); const output = fs.createWriteStream(file); let size = 0; log('INFO', `desktop upload started name=${name}; host=${req.socket.remoteAddress}`); req.on('data', chunk => { size += chunk.length; output.write(chunk); }); req.on('end', () => output.end(() => { received.set(name, { name, size, path: file, receivedAt: fs.statSync(file).mtimeMs }); log('INFO', `desktop upload saved name=${name}; size=${size}`); json(res, 201, { name, size }); })); req.on('error', error => log('ERROR', `desktop upload request failed name=${name}`, error)); }
+function uploadLocal(req, res) {
+  const requestedName = safeName(decodeURIComponent(req.headers['x-filename'] || 'file'));
+  const temporary = path.join(receivedDir, `.${requestedName}.${require('crypto').randomUUID()}.part`);
+  const output = fs.createWriteStream(temporary, { flags: 'wx' });
+  let size = 0;
+  log('INFO', `desktop upload started name=${requestedName}; host=${req.socket.remoteAddress}`);
+  req.on('data', chunk => { size += chunk.length; output.write(chunk); });
+  req.on('end', () => output.end(() => {
+    const name = availableFileName(requestedName);
+    const file = path.join(receivedDir, name);
+    fs.rename(temporary, file, error => {
+      if (error) { fs.rm(temporary, { force: true }, () => {}); return json(res, 500, { error: '保存文件失败' }); }
+      received.set(name, { name, size, path: file, receivedAt: fs.statSync(file).mtimeMs });
+      log('INFO', `desktop upload saved name=${name}; requested=${requestedName}; size=${size}`);
+      json(res, 201, { name, size });
+    });
+  }));
+  req.on('error', error => { output.destroy(); fs.rm(temporary, { force: true }, () => {}); log('ERROR', `desktop upload request failed name=${requestedName}`, error); });
+}
 function receiveClientLog(req, res) {
   let body = '';
   req.setEncoding('utf8');
