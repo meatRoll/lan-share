@@ -2,7 +2,7 @@
 const MAX_HOSTS = 4096;
 function ipv4Number(text) {
   const parts = text.split('.');
-  if (parts.length !== 4 || !parts.every(part => /^\d{1,3}$/.test(part) && Number(part) <= 255)) throw new Error(`无效的 IPv4 地址：${text}`);
+  if (parts.length !== 4 || !parts.every(part => /^\d{1,3}$/.test(part) && Number(part) <= 255)) throw new Error(`发现网段格式错误\n错误内容：${text}\n正确格式：192.168.1.0/24`);
   return parts.reduce((value, part) => value * 256 + Number(part), 0);
 }
 function format(ip) { return [24, 16, 8, 0].map(shift => (ip >>> shift) & 255).join('.'); }
@@ -17,15 +17,15 @@ function parse(text) {
   if (typeof text !== 'string' || text.length > 16384) throw new Error('网段配置过长或格式无效');
   const networks = text.split(/[\s,，;；]+/).filter(Boolean).map(token => {
     const parts = token.split('/');
-    if (parts.length !== 2) throw new Error(`请填写网段，例如 192.168.1.0/24：${token}`);
-    if (!/^\d{1,2}$/.test(parts[1]) || Number(parts[1]) < 20 || Number(parts[1]) > 32) throw new Error(`网段前缀需为 /20～/32：${token}`);
+    if (parts.length !== 2) throw new Error(`发现网段格式错误\n错误内容：${token}\n正确格式：192.168.1.0/24`);
+    if (!/^\d{1,2}$/.test(parts[1]) || Number(parts[1]) < 20 || Number(parts[1]) > 32) throw new Error(`发现网段格式错误\n错误内容：${token}\n前缀需为：/20～/32\n正确格式：192.168.1.0/24`);
     const net = subnet(ipv4Number(parts[0]), Number(parts[1]));
-    if (!privateIp(net.network) || !privateIp(net.network + net.size - 1)) throw new Error(`仅支持 10、172.16～31、192.168 私有网段：${token}`);
+    if (!privateIp(net.network) || !privateIp(net.network + net.size - 1)) throw new Error(`发现网段格式错误\n错误内容：${token}\n只支持私有网段：10.x.x.x、172.16～31.x.x、192.168.x.x\n正确格式：192.168.1.0/24`);
     return net;
   }).sort((a, b) => a.prefix - b.prefix);
   const minimal = [];
   for (const net of networks) if (!minimal.some(existing => contains(existing, net.network))) minimal.push(net);
-  if (minimal.reduce((total, net) => total + net.size, 0) > MAX_HOSTS) throw new Error(`配置范围合计不能超过 ${MAX_HOSTS} 个地址`);
+  if (minimal.reduce((total, net) => total + net.size, 0) > MAX_HOSTS) throw new Error(`发现网段范围过大\n当前配置合计超过 ${MAX_HOSTS} 个地址\n请缩小网段或分开配置`);
   return minimal;
 }
 function* targets(networks, ownAddresses = new Set()) {

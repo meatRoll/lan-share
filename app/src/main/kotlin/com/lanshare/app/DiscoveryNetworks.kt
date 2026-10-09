@@ -17,7 +17,9 @@ object DiscoveryNetworks {
 
     fun ipv4(text: String): Long {
         val parts = text.split('.')
-        require(parts.size == 4 && parts.all { it.matches(Regex("[0-9]{1,3}")) && it.toInt() in 0..255 }) { "无效的 IPv4 地址：$text" }
+        require(parts.size == 4 && parts.all { it.matches(Regex("[0-9]{1,3}")) && it.toInt() in 0..255 }) {
+            "发现网段格式错误\n错误内容：$text\n正确格式：192.168.1.0/24"
+        }
         return parts.fold(0L) { value, part -> (value shl 8) or part.toLong() }
     }
     fun format(ip: Long): String = listOf(24, 16, 8, 0).joinToString(".") { ((ip shr it) and 255).toString() }
@@ -28,16 +30,22 @@ object DiscoveryNetworks {
         require(text.length <= 16384) { "网段配置过长" }
         val networks = text.split(Regex("[\\s,，;；]+")).filter { it.isNotBlank() }.map { token ->
             val parts = token.split('/')
-            require(parts.size == 2) { "请填写网段，例如 192.168.1.0/24：$token" }
+            require(parts.size == 2) { "发现网段格式错误\n错误内容：$token\n正确格式：192.168.1.0/24" }
             val prefix = parts[1].takeIf { it.matches(Regex("[0-9]{1,2}")) }?.toIntOrNull()
-            require(prefix != null && prefix in 20..32) { "网段前缀需为 /20～/32：$token" }
+            require(prefix != null && prefix in 20..32) {
+                "发现网段格式错误\n错误内容：$token\n前缀需为：/20～/32\n正确格式：192.168.1.0/24"
+            }
             val net = subnet(ipv4(parts[0]), prefix)
-            require(privateIp(net.network) && privateIp(net.network + net.size - 1)) { "仅支持 10、172.16～31、192.168 私有网段：$token" }
+            require(privateIp(net.network) && privateIp(net.network + net.size - 1)) {
+                "发现网段格式错误\n错误内容：$token\n只支持私有网段：10.x.x.x、172.16～31.x.x、192.168.x.x\n正确格式：192.168.1.0/24"
+            }
             net
         }.distinct().sortedBy { it.prefix }
         val minimal = mutableListOf<Subnet>()
         for (net in networks) if (minimal.none { it.contains(net.network) }) minimal.add(net)
-        require(minimal.sumOf { it.size } <= MAX_HOSTS) { "配置范围合计不能超过 $MAX_HOSTS 个地址" }
+        require(minimal.sumOf { it.size } <= MAX_HOSTS) {
+            "发现网段范围过大\n当前配置合计超过 $MAX_HOSTS 个地址\n请缩小网段或分开配置"
+        }
         return minimal
     }
 

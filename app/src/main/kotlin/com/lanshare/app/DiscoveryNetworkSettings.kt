@@ -103,7 +103,7 @@ object DiscoveryNetworkSettings {
                     Toast.makeText(context, "发现网段已保存，正在搜索", Toast.LENGTH_SHORT).show()
                     dialog.dismiss()
                 } catch (error: IllegalArgumentException) {
-                    input.error = error.message
+                    input.error = error.message?.replace("\n", " · ")
                     Toast.makeText(context, error.message, Toast.LENGTH_LONG).show()
                     input.requestFocus()
                 }
