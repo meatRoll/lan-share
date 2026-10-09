@@ -10,13 +10,14 @@
   <p class="hint">点击网段可复制；跨网段发现可在设置中配置。</p>
 </section>
 <dialog id="currentQrDialog"><h2>当前网段二维码</h2><img id="currentQrImage" alt="当前网段二维码"><p id="currentQrText"></p><button id="closeCurrentQr" type="button">关闭</button></dialog>
+<dialog id="configuredQrDialog"><h2>配置网段二维码</h2><img id="configuredQrImage" alt="配置网段二维码"><p id="configuredQrText"></p><p class="hint">可用手机 LanShare 扫描此二维码导入网段。</p><button id="closeConfiguredQr" type="button">关闭</button></dialog>
 <dialog id="networkSettings">
   <form id="networkForm">
     <h2>发现网段</h2>
     <p class="hint">每行一个，例如 192.168.1.0/24。支持多个私有 IPv4 网段，前缀 /20～/32，合计最多 4096 个地址。保存后立即搜索，每轮完成后等待 30 秒再次查询。留空仅使用正常广播和已知地址发现。</p>
     <label for="networkInput">要搜索的网段</label>
     <textarea id="networkInput" rows="5" placeholder="192.168.1.0/24&#10;192.168.2.0/24"></textarea>
-    <div id="networkQrWrap"><img id="networkQr" alt="发现网段二维码"><p class="hint">可用手机 LanShare 扫描此二维码导入网段。</p></div>
+    <button id="showConfiguredQr" type="button">显示配置网段二维码</button>
     <p id="networkError" role="alert"></p>
     <button id="addCurrentNetwork" type="button">加入当前网段</button>
     <button type="submit">保存并搜索</button>

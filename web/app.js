@@ -154,7 +154,7 @@ async function loadNetworkSettings() {
     $('#currentNetworks').textContent = currentNetworks.join(' · ') || '未连接 IPv4 网络';
     $('#currentNetworks').disabled = !currentNetworks.length;
     const qrNetworks = savedNetworks || currentNetworks.join('\n');
-    $('#networkQr').src = qrNetworks ? `/api/discovery/qr.svg?networks=${encodeURIComponent(qrNetworks)}` : '';
+    $('#configuredQrImage').src = qrNetworks ? `/api/discovery/qr.svg?networks=${encodeURIComponent(qrNetworks)}` : '';
   } catch (error) { $('#currentNetworks').textContent = error.message; }
 }
 $('#currentNetworks').onclick = async () => {
@@ -171,10 +171,16 @@ $('#currentNetworkQr').onclick = async () => {
   $('#currentQrDialog').showModal();
 };
 $('#closeCurrentQr').onclick = () => $('#currentQrDialog').close();
-$('#networkInput').oninput = () => {
-  const value = $('#networkInput').value.trim();
-  $('#networkQr').src = value ? `/api/discovery/qr.svg?networks=${encodeURIComponent(value)}` : '';
+$('#networkInput').oninput = () => { };
+$('#showConfiguredQr').onclick = async () => {
+  await loadNetworkSettings();
+  const qrNetworks = savedNetworks || currentNetworks.join('\n');
+  if (!qrNetworks) { status.textContent = '没有已配置或当前 IPv4 网段'; return; }
+  $('#configuredQrImage').src = `/api/discovery/qr.svg?networks=${encodeURIComponent(qrNetworks)}`;
+  $('#configuredQrText').textContent = qrNetworks;
+  $('#configuredQrDialog').showModal();
 };
+$('#closeConfiguredQr').onclick = () => $('#configuredQrDialog').close();
 $('#settings').onclick = async () => {
   await loadNetworkSettings();
   $('#networkInput').value = savedNetworks;
@@ -196,7 +202,6 @@ $('#networkForm').onsubmit = async event => {
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || '保存失败');
     savedNetworks = result.networks;
-    $('#networkQr').src = savedNetworks ? `/api/discovery/qr.svg?networks=${encodeURIComponent(savedNetworks)}` : '';
     $('#networkSettings').close();
     status.textContent = '发现网段已保存，正在搜索';
     await loadDevices();
