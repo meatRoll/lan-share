@@ -201,7 +201,7 @@ function serveFile(req, res, file) {
     : file.endsWith('.css')
       ? 'text/css; charset=utf-8'
       : 'text/javascript; charset=utf-8';
-  res.writeHead(200, { 'Content-Type': type });
+  res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store' });
   fs.createReadStream(path.join(webRoot, file)).pipe(res);
 }
 function handler(req, res) {
