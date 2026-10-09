@@ -142,11 +142,59 @@ async function upload(fileList) {
   }
 }
 
+let currentNetworks = [];
+let savedNetworks = '';
+async function loadNetworkSettings() {
+  try {
+    const response = await fetch('/api/discovery/settings');
+    if (!response.ok) throw new Error('无法读取网段设置');
+    const settings = await response.json();
+    currentNetworks = settings.currentNetworks || [];
+    savedNetworks = settings.networks || '';
+    $('#currentNetworks').textContent = currentNetworks.join(' · ') || '未连接 IPv4 网络';
+    $('#currentNetworks').disabled = !currentNetworks.length;
+  } catch (error) { $('#currentNetworks').textContent = error.message; }
+}
+$('#currentNetworks').onclick = async () => {
+  try {
+    await navigator.clipboard.writeText(currentNetworks.join('\n'));
+    status.textContent = '当前网段已复制';
+  } catch (_) { status.textContent = '无法访问剪贴板，请手动复制显示的网段'; }
+};
+$('#settings').onclick = async () => {
+  await loadNetworkSettings();
+  $('#networkInput').value = savedNetworks;
+  $('#networkError').textContent = '';
+  $('#networkSettings').showModal();
+  $('#networkInput').focus();
+};
+$('#cancelNetworkSettings').onclick = () => $('#networkSettings').close();
+$('#addCurrentNetwork').onclick = () => {
+  $('#networkInput').value = [...new Set([...$('#networkInput').value.trim().split('\n').filter(Boolean), ...currentNetworks])].join('\n');
+};
+$('#networkForm').onsubmit = async event => {
+  event.preventDefault();
+  try {
+    const response = await fetch('/api/discovery/settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ networks: $('#networkInput').value }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || '保存失败');
+    savedNetworks = result.networks;
+    $('#networkSettings').close();
+    status.textContent = '发现网段已保存，正在搜索';
+    await loadDevices();
+  } catch (error) { $('#networkError').textContent = error.message; }
+};
+loadNetworkSettings();
+setInterval(loadNetworkSettings, 10000);
+
 $("#refresh").onclick = async () => {
   try {
     const response = await fetch('/api/discovery/refresh', { method: 'POST' });
     if (!response.ok) throw new Error('重新搜索失败');
-    status.textContent = '正在通过广播和已知 IP 重新搜索';
+    status.textContent = '正在搜索广播、已知 IP 和配置的网段';
     await loadDevices();
   } catch (error) { status.textContent = error.message; }
 };

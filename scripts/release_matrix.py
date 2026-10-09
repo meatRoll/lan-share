@@ -23,8 +23,8 @@ def matrix(old_text, new_text):
         previous_name, previous_code = old.get(prefix + "versionName"), old.get(prefix + "versionCode")
         if name == previous_name and str(code) == previous_code:
             continue
-        if not re.fullmatch(r"\d+\.\d+\.\d+", name):
-            raise ValueError(f"{platform}: release version must have three numeric segments")
+        if not re.fullmatch(r"\d+\.\d+\.\d+(?:_feat\.[1-9]\d*)?", name):
+            raise ValueError(f"{platform}: version must be three numeric segments, optionally followed by _feat.N")
         if previous_code is not None and code <= int(previous_code):
             raise ValueError(f"{platform}: versionCode must strictly increase")
         if previous_name == name:

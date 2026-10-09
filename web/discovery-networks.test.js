@@ -1,0 +1,14 @@
+const assert = require('node:assert/strict');
+const networks = require('./discovery-networks');
+const parsed = networks.parse('192.168.211.229/24\n192.168.211.0/25,192.168.211.0/24\n10.1.2.3/32');
+assert.deepEqual(parsed.map(net => net.cidr), ['192.168.211.0/24', '10.1.2.3/32']);
+const hosts = [...networks.targets(parsed, new Set(['192.168.211.2']))];
+assert.equal(hosts.length, 254);
+assert(hosts.includes('192.168.211.229'));
+for (const excluded of ['192.168.211.0', '192.168.211.255', '192.168.211.2']) assert(!hosts.includes(excluded));
+assert.deepEqual([...networks.targets(networks.parse('10.0.0.0/31\n172.31.1.2/32'))], ['10.0.0.0', '10.0.0.1', '172.31.1.2']);
+for (const text of ['192.168.1.0', '192.168.300.0/24', '8.8.8.0/24', '172.32.0.0/24', '10.0.0.0/19', '10.0.0.0/20\n10.0.16.0/20', 'example.com/24']) assert.throws(() => networks.parse(text));
+assert.equal([...networks.targets(networks.parse('10.0.0.0/20'))].length, 4094);
+assert.deepEqual(networks.parse(' \n '), []);
+assert.deepEqual(networks.localSubnets([{ address: '192.168.216.151', cidr: '192.168.216.151/24' }]), ['192.168.216.0/24']);
+console.log('PASS: CIDR validation, canonicalization, overlap deduplication, private ranges, host limits, own-address exclusion, /31 and /32');
