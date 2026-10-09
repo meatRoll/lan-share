@@ -254,9 +254,23 @@ function availableFileName(name) {
   let candidate = name;
   let index = 1;
   while (fs.existsSync(path.join(receivedDir, candidate)) || received.has(candidate)) {
-    candidate = `${parsed.name} (${index++})${parsed.ext}`;
+    const suffix = ` (${index++})${parsed.ext}`;
+    candidate = Array.from(parsed.name).slice(0, Math.max(1, 120 - Array.from(suffix).length)).join('') + suffix;
   }
   return candidate;
+}
+function publishReceivedFile(temporary, requestedName, callback) {
+  const name = availableFileName(requestedName);
+  const file = path.join(receivedDir, name);
+  // Linking publishes the completed file without replacing an existing path.
+  fs.link(temporary, file, error => {
+    if (error?.code === 'EEXIST') return publishReceivedFile(temporary, requestedName, callback);
+    if (error) return callback(error);
+    fs.unlink(temporary, cleanupError => {
+      if (cleanupError && typeof log === 'function') log('ERROR', 'temporary file cleanup failed', cleanupError);
+      callback(null, name, file);
+    });
+  });
 }
 function contentDisposition(name) {
   const fallback = safeName(name).replace(/[^a-zA-Z0-9._ -]/g, '_');
@@ -307,9 +321,7 @@ function receiveTcp(socket) {
       if (finished) return;
       finished = true;
       output.end(() => {
-        const finalName = availableFileName(name);
-        const finalFile = path.join(receivedDir, finalName);
-        fs.rename(temporary, finalFile, error => {
+        publishReceivedFile(temporary, name, (error, finalName, finalFile) => {
           if (error) {
             log('ERROR', 'tcp save failed', error);
             fs.rm(temporary, { force: true }, () => {});
@@ -352,13 +364,16 @@ function uploadLocal(req, res) {
   const requestedName = safeName(decodeURIComponent(req.headers['x-filename'] || 'file'));
   const temporary = path.join(receivedDir, `.${requestedName}.${require('crypto').randomUUID()}.part`);
   const output = fs.createWriteStream(temporary, { flags: 'wx' });
+  output.on('error', error => {
+    log('ERROR', 'desktop upload write failed', error);
+    req.destroy();
+    output.once('close', () => fs.rm(temporary, { force: true }, () => {}));
+  });
   let size = 0;
   log('INFO', `desktop upload started name=${requestedName}; host=${req.socket.remoteAddress}`);
   req.on('data', chunk => { size += chunk.length; output.write(chunk); });
   req.on('end', () => output.end(() => {
-    const name = availableFileName(requestedName);
-    const file = path.join(receivedDir, name);
-    fs.rename(temporary, file, error => {
+    publishReceivedFile(temporary, requestedName, (error, name, file) => {
       if (error) { fs.rm(temporary, { force: true }, () => {}); return json(res, 500, { error: '保存文件失败' }); }
       received.set(name, { name, size, path: file, receivedAt: fs.statSync(file).mtimeMs });
       log('INFO', `desktop upload saved name=${name}; requested=${requestedName}; size=${size}`);

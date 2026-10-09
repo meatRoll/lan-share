@@ -359,16 +359,12 @@ class LanShareService(private val context: Context, private val listener: Listen
     }
 
     private fun uniqueIncomingName(name: String): String {
-        val safe = FileNames.safe(name)
         val publicDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "LanShare")
         val appDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-        val parsed = File(safe).let { it.nameWithoutExtension to it.extension }
-        var candidate = safe
-        var index = 1
-        while (listOf(publicDir, appDir).filterNotNull().any { File(it, candidate).exists() }) {
-            candidate = if (parsed.second.isBlank()) "${parsed.first} ($index++)" else "${parsed.first} ($index++).${parsed.second}"
+        val httpAppDir = appDir?.let { File(it, "LanShare") }
+        return FileNames.available(name) { candidate ->
+            listOf(publicDir, appDir, httpAppDir).filterNotNull().any { File(it, candidate).exists() }
         }
-        return candidate
     }
 
     private fun saveIncoming(input: InputStream, name: String, size: Long): File {
