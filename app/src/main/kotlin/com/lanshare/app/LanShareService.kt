@@ -312,7 +312,12 @@ class LanShareService(private val context: Context, private val listener: Listen
                 }
             }
         } catch (e: Exception) {
-            if (running) { Logcat.e("discovery", e); listener.onError("设备发现暂不可用，正在重试：${e.message}") }
+            if (running) {
+                Logcat.e("discovery", e)
+                if (e !is BindException || !e.message.orEmpty().contains("EADDRINUSE")) {
+                    listener.onError("设备发现暂不可用，正在重试：${e.message}")
+                }
+            }
         }
         if (running) try { Thread.sleep(2000) } catch (_: InterruptedException) { return }
       }
