@@ -17,6 +17,9 @@ local.properties
 .env
 .env.*
 
+# Local project configuration and secrets
+.config/
+
 # Local discovery, received files and diagnostics
 *.log
 web/.discovery-state.json
