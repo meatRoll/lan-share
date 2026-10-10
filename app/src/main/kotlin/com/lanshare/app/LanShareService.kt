@@ -57,6 +57,10 @@ class LanShareService(private val context: Context, private val listener: Listen
     private val knownHosts = context.getSharedPreferences("settings", Context.MODE_PRIVATE).getStringSet("known_hosts", emptySet())!!.toMutableSet()
     @Volatile private var discoverySocket: DatagramSocket? = null
     @Volatile private var transferServer: ServerSocket? = null
+    private val networkSearchWorker = Executors.newSingleThreadScheduledExecutor()
+    private var networkSearchTask: java.util.concurrent.ScheduledFuture<*>? = null
+    @Volatile private var networkSearchGeneration = 0
+    @Volatile private var configuredNetworks: List<DiscoveryNetworks.Subnet> = emptyList()
 
     @Synchronized fun start() {
         if (running) return
@@ -69,6 +73,7 @@ class LanShareService(private val context: Context, private val listener: Listen
         executor.execute { discoveryLoop() }
         executor.execute { serverLoop() }
         executor.execute { announceLoop() }
+        updateDiscoveryNetworks()
         webGateway = HttpGateway(context, name, listener).also { it.start() }
     }
 
@@ -77,11 +82,52 @@ class LanShareService(private val context: Context, private val listener: Listen
         Logcat.d("discovery", "refresh requested; UDP closed=${discoverySocket?.isClosed}; TCP closed=${transferServer?.isClosed}; transfer services kept running")
         diagnostics?.snapshot("refresh discovery")
         probeKnownHosts()
-        if (running) executor.execute { announceOnce() }
+        if (running) {
+            executor.execute { announceOnce() }
+            updateDiscoveryNetworks()
+        }
+    }
+
+    @Synchronized fun updateDiscoveryNetworks() {
+        configuredNetworks = try {
+            DiscoveryNetworks.parse(context.getSharedPreferences("settings", Context.MODE_PRIVATE).getString("discovery_networks", "").orEmpty())
+        } catch (error: IllegalArgumentException) { listener.onError(error.message ?: "发现网段配置无效"); emptyList() }
+        networkSearchGeneration++
+        networkSearchTask?.cancel(true)
+        if (!running || configuredNetworks.isEmpty()) return
+        val generation = networkSearchGeneration
+        val networks = configuredNetworks
+        networkSearchTask = networkSearchWorker.scheduleWithFixedDelay({
+            try {
+                // Startup may reach this worker before the discovery listener has bound.
+                var socket = discoverySocket
+                for (attempt in 0 until 20) {
+                    if (!running || generation != networkSearchGeneration) return@scheduleWithFixedDelay
+                    if (socket != null && !socket.isClosed) break
+                    Thread.sleep(100)
+                    socket = discoverySocket
+                }
+                val listening = socket?.takeUnless { it.isClosed } ?: return@scheduleWithFixedDelay
+                val query = "$MAGIC|QUERY|$id|${name.replace('|', '_')}|$TRANSFER_PORT".toByteArray(StandardCharsets.UTF_8)
+                for (host in DiscoveryNetworks.targets(networks, DiscoveryNetworks.localAddresses())) {
+                    if (!running || generation != networkSearchGeneration || Thread.currentThread().isInterrupted) break
+                    try {
+                        listening.send(DatagramPacket(query, query.size, DiscoveryNetworks.address(host), DISCOVERY_PORT))
+                    } catch (error: Exception) {
+                        if (running) Logcat.e("configured network query", error)
+                    }
+                    Thread.sleep(10)
+                }
+            } catch (_: InterruptedException) { /* Refresh or stop cancels the previous scan. */ }
+            catch (error: Exception) { if (running) Logcat.e("configured network discovery", error) }
+        }, 0, 30, TimeUnit.SECONDS)
     }
 
     @Synchronized fun stop() {
         running = false
+        networkSearchGeneration++
+        networkSearchTask?.cancel(true)
+        networkSearchWorker.shutdownNow()
         diagnostics?.stop()
         diagnostics = null
         discoverySocket?.close()
@@ -201,7 +247,7 @@ class LanShareService(private val context: Context, private val listener: Listen
                                     }
                                 }
                             } == true
-                            if (onLan) {
+                            if (onLan || configuredNetworks.any { it.contains(DiscoveryNetworks.ipv4(host)) }) {
                                 listening.send(DatagramPacket(query, query.size, address, DISCOVERY_PORT))
                                 Logcat.d("discovery query", "unicast to $host:$DISCOVERY_PORT")
                             }
@@ -215,7 +261,7 @@ class LanShareService(private val context: Context, private val listener: Listen
                             socket.send(DatagramPacket(message, message.size, target, DISCOVERY_PORT))
                             Logcat.d("announce", "sent ${message.size} bytes to ${target.hostAddress}:$DISCOVERY_PORT")
                         } catch (e: Exception) {
-                            if (isTransientNetworkError(e)) Logcat.d("announce", "LAN network temporarily unavailable; will retry: ${e.message}")
+                            if (isTransientNetworkError(e)) Logcat.d("announce ${target.hostAddress}", "LAN network temporarily unavailable; will retry: ${e.message}")
                             else Logcat.e("announce ${target.hostAddress}", e)
                         }
                     }
@@ -274,13 +320,13 @@ class LanShareService(private val context: Context, private val listener: Listen
                             }
                             val found = Device(parts[2], parts[3], packet.address, port)
                             lastSeen[found.id] = System.currentTimeMillis()
+                            val host = packet.address.hostAddress
+                            if (host != null) synchronized(knownHosts) {
+                                if (knownHosts.add(host)) context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+                                    .edit().putStringSet("known_hosts", knownHosts.toSet()).apply()
+                            }
                             if (devices.none { it.id == found.id }) {
                                 Logcat.d("discovery", "found ${found.name} at ${packet.address.hostAddress}:$port")
-                                val host = packet.address.hostAddress
-                                if (host != null) synchronized(knownHosts) {
-                                    knownHosts.add(host)
-                                    context.getSharedPreferences("settings", Context.MODE_PRIVATE).edit().putStringSet("known_hosts", knownHosts.toSet()).apply()
-                                }
                             }
                             val index = devices.indexOfFirst { it.id == found.id }
                             if (index < 0) {
