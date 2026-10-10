@@ -30,7 +30,7 @@
 
 工作流也支持在 GitHub Actions 页面使用 `workflow_dispatch` 手动运行。当前实现将手动运行视为没有旧版本基线，会构建所选分支的全部三个平台，即使版本号没有变化。正常发布优先通过版本变更触发 push；手动运行仅用于明确需要的补建或重试，避免为未变更平台重复上传。
 
-每个平台生成独立 GitHub Release，标签例如 `tvModern-v0.5.12`，上传正式签名 APK，同时保存 Actions artifact。用户明确授权的功能测试版本允许在现有数字版本后追加 `_feat.N`（N 为正整数），必须同时增加 versionCode；CI 将这类 Release 标记为预发布，不作为最新版。常规版本继续使用三段数字。重跑同一工作流会复用 Release 并覆盖同名资产。
+每个平台生成独立 GitHub Release，标签例如 `tvModern-v0.5.12`，上传正式签名 APK，同时保存 Actions artifact。实机测试版本可使用 `tvModern-v0.5.12_fix.1` 或 `tvModern-v0.5.12_feat.1`，分别表示修复测试包和新特性测试包；这两类版本都不是正式版本。重跑同一工作流会复用 Release 并覆盖同名资产。
 
 版本策略见 [AGENTS.md](AGENTS.md)。无需本地 assemble，也不要把 APK 加入 Git。
 
