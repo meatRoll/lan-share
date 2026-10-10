@@ -186,6 +186,31 @@ class LanShareService(private val context: Context, private val listener: Listen
         }
     }
 
+    private fun bindLanSocket(socket: DatagramSocket) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        try {
+            val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+            val network = manager.allNetworks.firstOrNull { candidate ->
+                val capabilities = manager.getNetworkCapabilities(candidate)
+                capabilities?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) == true ||
+                    capabilities?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) == true
+            }
+            network?.bindSocket(socket)
+            if (network != null) Logcat.d("discovery", "UDP socket bound to LAN network=$network")
+        } catch (error: Exception) {
+            Logcat.d("discovery", "could not bind UDP socket to LAN network: ${error.message}")
+        }
+    }
+
+    private fun isTransientNetworkError(error: Throwable): Boolean {
+        var current: Throwable? = error
+        while (current != null) {
+            if (current.message.orEmpty().contains("EPERM") || current.message.orEmpty().contains("EHOSTUNREACH") || current.message.orEmpty().contains("ENETUNREACH")) return true
+            current = current.cause
+        }
+        return false
+    }
+
     private fun announceLoop() {
         while (running) {
             announceOnce()
@@ -196,6 +221,7 @@ class LanShareService(private val context: Context, private val listener: Listen
     private fun announceOnce() {
             try {
                 DatagramSocket().use { socket ->
+                    bindLanSocket(socket)
                     socket.broadcast = true
                     val message = "$MAGIC|HELLO|$id|${name.replace('|', '_')}|$TRANSFER_PORT".toByteArray(StandardCharsets.UTF_8)
                     val targets = linkedSetOf<InetAddress>()
@@ -225,18 +251,25 @@ class LanShareService(private val context: Context, private val listener: Listen
                                 listening.send(DatagramPacket(query, query.size, address, DISCOVERY_PORT))
                                 Logcat.d("discovery query", "unicast to $host:$DISCOVERY_PORT")
                             }
-                        } catch (e: Exception) { if (running) Logcat.e("discovery query", e) }
+                        } catch (e: Exception) {
+                            if (isTransientNetworkError(e)) Logcat.d("discovery query", "LAN network temporarily unavailable; will retry: ${e.message}")
+                            else if (running) Logcat.e("discovery query", e)
+                        }
                     }
                     for (target in targets) {
                         try {
                             socket.send(DatagramPacket(message, message.size, target, DISCOVERY_PORT))
                             Logcat.d("announce", "sent ${message.size} bytes to ${target.hostAddress}:$DISCOVERY_PORT")
                         } catch (e: Exception) {
-                            Logcat.e("announce ${target.hostAddress}", e)
+                            if (isTransientNetworkError(e)) Logcat.d("announce ${target.hostAddress}", "LAN network temporarily unavailable; will retry: ${e.message}")
+                            else Logcat.e("announce ${target.hostAddress}", e)
                         }
                     }
                 }
-            } catch (e: Exception) { Logcat.e("announce", e) }
+            } catch (e: Exception) {
+                if (isTransientNetworkError(e)) Logcat.d("announce", "LAN network temporarily unavailable; will retry: ${e.message}")
+                else Logcat.e("announce", e)
+            }
     }
 
     @Synchronized fun updateDiagnostics() {
@@ -264,7 +297,10 @@ class LanShareService(private val context: Context, private val listener: Listen
         try {
             val boundSocket = synchronized(this) {
                 if (!running) return
-                DatagramSocket(DISCOVERY_PORT).also { discoverySocket = it }
+                DatagramSocket(DISCOVERY_PORT).also {
+                    bindLanSocket(it)
+                    discoverySocket = it
+                }
             }
             boundSocket.use { socket ->
                 Logcat.d("discovery", "listening on UDP $DISCOVERY_PORT")
@@ -313,8 +349,9 @@ class LanShareService(private val context: Context, private val listener: Listen
             }
         } catch (e: Exception) {
             if (running) {
-                Logcat.e("discovery", e)
-                if (e !is BindException || !e.message.orEmpty().contains("EADDRINUSE")) {
+                if (isTransientNetworkError(e)) Logcat.d("discovery", "LAN network temporarily unavailable; restarting UDP listener: ${e.message}")
+                else Logcat.e("discovery", e)
+                if (!isTransientNetworkError(e) && (e !is BindException || !e.message.orEmpty().contains("EADDRINUSE"))) {
                     listener.onError("设备发现暂不可用，正在重试：${e.message}")
                 }
             }
