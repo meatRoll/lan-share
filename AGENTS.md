@@ -13,8 +13,7 @@
 
 ## 构建与发布
 
-- 用户要求由 GitHub 构建 Release。**不在本地生成、复制或长期保存新的 APK/AAB，也不得提交构建产物**；本地可做源码编译和自动测试。用户另行明确要求本地产物时才例外。
-- APK 只通过 GitHub Actions artifact / GitHub Release 分发。未变更版本的平台不构建、不上传重复包。用户允许将 GitHub 构建的 APK 下载到被 Git 忽略的 `release-downloads/`，不得将该目录加入版本控制。
+- 用户要求由 GitHub 构建 Release。**不在本地生成、复制或长期保存新的 APK/AAB，也不得提交构建产物**；本地可做源码编译和自动测试。用户另行明确要求本地产物时才例外。默认情况下，版本构建必须在本地完成；只有用户明确要求“通过 GitHub Actions 构建新版本”时，才允许使用 GitHub Actions 构建。APK 只通过 GitHub Actions artifact / GitHub Release 分发。未变更版本的平台不构建、不上传重复包。用户允许将 GitHub 构建的 APK 下载到被 Git 忽略的 `release-downloads/`，不得将该目录加入版本控制。
 - Git 提交身份应沿用仓库历史中已确认的维护者身份。提交前核对历史提交与仓库级 `user.name` / `user.email`；配置缺失时仅补充仓库级配置，身份冲突或无法确认时先询问用户，不得直接沿用其他项目的全局身份，也不得修改全局配置。
 - Release 使用正式签名。签名文件、密码、别名敏感配置通过 GitHub Secrets 注入，禁止提交；缺失配置时应失败，不能悄悄使用 debug 签名。
 - 不删除用户已有下载文件或历史 APK；清理已有文件须征得同意。
