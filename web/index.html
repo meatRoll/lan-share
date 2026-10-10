@@ -1,2 +1,31 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>LanShare Web Desktop</title><link rel="stylesheet" href="style.css"></head><body><main><header><div><p class="eyebrow">LOCAL NETWORK BRIDGE</p><h1>LanShare Web</h1><p>本地服务正在自动发现手机和 TV</p></div><span class="dot">● 已连接本地服务</span></header><section class="devices"><div class="section-head"><h2>附近设备</h2><button id="refresh">重新搜索</button></div><div id="devices" class="device-list"><p class="muted">正在搜索…</p></div></section><section class="drop" id="drop"><div class="upload-icon">↑</div><h2>发送文件到设备</h2><p id="targetHint">请先选择目标设备</p><input id="picker" type="file" multiple disabled><button id="chooseFiles" class="button" type="button" disabled>选择文件</button></section><section><div class="section-head"><h2>这台电脑已接收的文件</h2><button id="reloadFiles">重新加载</button></div><div id="files" class="files"><p class="muted">正在加载…</p></div></section><p id="status" class="status"></p></main><script src="app.js"></script></body></html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>LanShare Web Desktop</title><link rel="stylesheet" href="style.css"></head>
+<body><main>
+<header><div><p class="eyebrow">LOCAL NETWORK BRIDGE</p><h1>LanShare Web</h1><p>本地服务正在自动发现手机和 TV</p></div><span class="dot">● 已连接本地服务</span></header>
+<section class="network-panel">
+  <div class="section-head"><h2>当前网段</h2><button id="settings" type="button">设置</button></div>
+  <button id="currentNetworks" type="button" title="点击复制当前网段">正在读取网段…</button>
+  <button id="currentNetworkQr" type="button">显示当前网段二维码</button>
+  <p class="hint">点击网段可复制；跨网段发现可在设置中配置。</p>
+</section>
+<dialog id="currentQrDialog"><h2>当前网段二维码</h2><img id="currentQrImage" alt="当前网段二维码"><p id="currentQrText"></p><button id="closeCurrentQr" type="button">关闭</button></dialog>
+<dialog id="configuredQrDialog"><h2>配置网段二维码</h2><img id="configuredQrImage" alt="配置网段二维码"><p id="configuredQrText"></p><p class="hint">可用手机 LanShare 扫描此二维码导入网段。</p><button id="closeConfiguredQr" type="button">关闭</button></dialog>
+<dialog id="networkSettings">
+  <form id="networkForm">
+    <h2>发现网段</h2>
+    <p class="hint">每行一个，例如 192.168.1.0/24。支持多个私有 IPv4 网段，前缀 /20～/32，合计最多 4096 个地址。保存后立即搜索，每轮完成后等待 30 秒再次查询。留空仅使用正常广播和已知地址发现。</p>
+    <label for="networkInput">要搜索的网段</label>
+    <textarea id="networkInput" rows="5" placeholder="192.168.1.0/24&#10;192.168.2.0/24"></textarea>
+    <button id="showConfiguredQr" type="button">显示配置网段二维码</button>
+    <p id="networkError" role="alert"></p>
+    <button id="addCurrentNetwork" type="button">加入当前网段</button>
+    <button type="submit">保存并搜索</button>
+    <button id="cancelNetworkSettings" type="button">取消</button>
+  </form>
+</dialog>
+<section class="devices"><div class="section-head"><h2>附近设备</h2><button id="refresh">重新搜索</button></div><div id="devices" class="device-list"><p class="muted">正在搜索…</p></div></section>
+<section class="drop" id="drop"><div class="upload-icon">↑</div><h2>发送文件到设备</h2><p id="targetHint">请先选择目标设备</p><input id="picker" type="file" multiple disabled><button id="chooseFiles" class="button" type="button" disabled>选择文件</button></section>
+<section><div class="section-head"><h2>这台电脑已接收的文件</h2><button id="reloadFiles">重新加载</button></div><div id="files" class="files"><p class="muted">正在加载…</p></div></section>
+<p id="status" class="status"></p>
+</main><script src="app.js"></script></body></html>

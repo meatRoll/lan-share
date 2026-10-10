@@ -34,7 +34,7 @@ class MainActivity : Activity(), LanShareService.Listener {
     private var selected: LanShareService.Device? = null
     private var pendingUris: List<Uri> = emptyList()
     private var pendingLogSend = false
-    private var status = "正在搜索同一 Wi-Fi 下的设备…"
+    private var status = "正在搜索局域网设备…"
     private val receivedFiles = mutableListOf<File>()
     private val receivedPrefs by lazy { getSharedPreferences("received_files", MODE_PRIVATE) }
     private val openLocationRequestCode = 1207
@@ -42,6 +42,7 @@ class MainActivity : Activity(), LanShareService.Listener {
     private val fileManagerReturnNotificationId = 1208
     private val fileManagerReturnChannel = "file_manager_return_v2"
     private val notificationPermissionRequestCode = 42
+    private val discoveryQrRequestCode = 7302
 
     override fun onStart() {
         super.onStart()
@@ -366,8 +367,9 @@ class MainActivity : Activity(), LanShareService.Listener {
         val root = baseLayout(); title.text = "局域网传输"
         content.addView(label("我的设备", 20))
         content.addView(rowCard(android.os.Build.MODEL ?: "Android", "在线 · 等待附近设备连接", "本机", lime, false))
+        content.addView(DiscoveryNetworkSettings.currentButton(this, false))
         content.addView(label("附近设备", 24))
-        if (devices.isEmpty()) content.addView(TextView(this).apply { text = "暂未发现设备\n请确认两台设备连接到同一个 Wi-Fi"; gravity = Gravity.CENTER; setTextColor(muted); textSize = 14f; setPadding(0, 36, 0, 36) })
+        if (devices.isEmpty()) content.addView(TextView(this).apply { text = "暂未发现设备\n请确认设备网络互通；跨网段请在设置中配置发现网段"; gravity = Gravity.CENTER; setTextColor(muted); textSize = 14f; setPadding(0, 36, 0, 36) })
         devices.forEach { device ->
             val row = rowCard(device.name, "在线 · ${device.address.hostAddress}", "设备", Color.rgb(124, 189, 235), true)
             row.setOnClickListener {
@@ -418,6 +420,19 @@ class MainActivity : Activity(), LanShareService.Listener {
             orientation = LinearLayout.VERTICAL
             setPadding(48, 0, 48, 0)
             addView(input)
+            addView(button("配置发现网段", panel, Color.WHITE).apply {
+                setOnClickListener {
+                    settingsDialog.dismiss()
+                    DiscoveryNetworkSettings.show(this@MainActivity, service, false)
+                }
+            }, LinearLayout.LayoutParams(-1, 52.dp()).apply { topMargin = 12.dp() })
+            addView(button("显示发现网段二维码", panel, Color.WHITE).apply {
+                setOnClickListener { settingsDialog.dismiss(); DiscoveryNetworkSettings.showQr(this@MainActivity) }
+            }, LinearLayout.LayoutParams(-1, 52.dp()).apply { topMargin = 12.dp() })
+            addView(button("扫描网段二维码", panel, Color.WHITE).apply {
+                setOnClickListener { settingsDialog.dismiss(); DiscoveryNetworkSettings.scan(this@MainActivity, discoveryQrRequestCode) }
+            }, LinearLayout.LayoutParams(-1, 52.dp()).apply { topMargin = 12.dp() })
+            addView(TextView(this@MainActivity).apply { text = "版本：${BuildConfig.VERSION_NAME}"; setTextColor(muted); textSize = 12f })
             addView(TextView(this@MainActivity).apply { text = "日志文件：${Logcat.logPath()}"; setTextColor(muted); textSize = 11f; setPadding(0, 16, 0, 0) })
             val loggingToggle = button(if (Logcat.isEnabled()) "诊断日志：开启" else "诊断日志：关闭", panel, Color.WHITE).apply {
                 isFocusable = true
@@ -518,6 +533,29 @@ class MainActivity : Activity(), LanShareService.Listener {
                         Logcat.e("open location", error)
                     }
                 }
+            }
+            return
+        }
+        if (requestCode == discoveryQrRequestCode && resultCode == RESULT_OK) {
+            val scanned = data?.getStringExtra(DiscoveryQr.RESULT_KEY)
+            if (scanned != null) {
+                try {
+                    val imported = DiscoveryNetworks.parse(scanned).joinToString("\n") { it.cidr }
+                    require(imported.isNotEmpty()) { "二维码没有可导入的网段" }
+                    AlertDialog.Builder(this).setTitle("导入发现网段")
+                        .setMessage("将以下网段合并到现有配置：\n$imported")
+                        .setNegativeButton("取消", null)
+                        .setPositiveButton("合并并搜索") { _, _ ->
+                            try {
+                                val prefs = getSharedPreferences("settings", MODE_PRIVATE)
+                                val merged = DiscoveryNetworks.parse(prefs.getString("discovery_networks", "").orEmpty() + "\n" + imported)
+                                    .joinToString("\n") { it.cidr }
+                                prefs.edit().putString("discovery_networks", merged).apply()
+                                service.updateDiscoveryNetworks()
+                                Toast.makeText(this, "已导入并搜索发现网段", Toast.LENGTH_LONG).show()
+                            } catch (error: IllegalArgumentException) { Toast.makeText(this, error.message, Toast.LENGTH_LONG).show() }
+                        }.show()
+                } catch (error: IllegalArgumentException) { Toast.makeText(this, error.message, Toast.LENGTH_LONG).show() }
             }
             return
         }

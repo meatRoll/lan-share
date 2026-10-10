@@ -46,6 +46,7 @@ class TvMainActivity : Activity(), LanShareService.Listener {
     private val storagePermissionRequestCode = 43
     private var awaitingAllFilesSettings = false
     private var fileBrowserDialog: AlertDialog? = null
+    private var currentNetworkView: TextView? = null
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
@@ -65,6 +66,15 @@ class TvMainActivity : Activity(), LanShareService.Listener {
 
     override fun onResume() {
         super.onResume()
+        currentNetworkView?.let { view ->
+            val parent = view.parent as? LinearLayout
+            if (parent != null) {
+                val index = parent.indexOfChild(view)
+                parent.removeView(view)
+                currentNetworkView = DiscoveryNetworkSettings.currentButton(this, true)
+                parent.addView(currentNetworkView, index)
+            }
+        }
         if (awaitingAllFilesSettings) {
             awaitingAllFilesSettings = false
             val granted = hasAllFilesAccess()
@@ -168,7 +178,7 @@ class TvMainActivity : Activity(), LanShareService.Listener {
         header.addView(TextView(this).apply { text = "●  本机在线"; textSize = 16f; setTextColor(lime) })
         root.addView(header)
         val columns = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, 22, 0, 0) }
-        columns.addView(infoPanel(), LinearLayout.LayoutParams(0, -1, 0.72f))
+        columns.addView(ScrollView(this).apply { addView(infoPanel()) }, LinearLayout.LayoutParams(0, -1, 0.72f))
         val devicesPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(22, 0, 0, 0) }
         devicesPanel.addView(TextView(this).apply { text = "附近设备"; textSize = 20f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE); setPadding(0, 0, 0, 14) })
         devicesBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -176,7 +186,7 @@ class TvMainActivity : Activity(), LanShareService.Listener {
         columns.addView(devicesPanel, LinearLayout.LayoutParams(0, -1, 0.9f))
         columns.addView(receivedPanel(), LinearLayout.LayoutParams(0, -1, 1.0f))
         root.addView(columns, LinearLayout.LayoutParams(-1, 0, 1f))
-        status = TextView(this).apply { text = "正在搜索同一 Wi-Fi 下的设备…"; textSize = 15f; setTextColor(muted); setPadding(0, 16, 0, 0) }
+        status = TextView(this).apply { text = "正在搜索局域网设备…"; textSize = 15f; setTextColor(muted); setPadding(0, 16, 0, 0) }
         root.addView(status)
         setContentView(root)
         renderDevices()
@@ -187,6 +197,8 @@ class TvMainActivity : Activity(), LanShareService.Listener {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(28, 24, 28, 24); background = rounded(panel, 14) }
         box.addView(TextView(this).apply { text = "本机接收中心"; textSize = 22f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE) })
         box.addView(TextView(this).apply { text = "${Build.MODEL}\n等待手机或电脑发送文件"; textSize = 16f; setTextColor(muted); setPadding(0, 14, 0, 0) })
+        currentNetworkView = DiscoveryNetworkSettings.currentButton(this, true)
+        box.addView(currentNetworkView)
         val refresh = focusButton("重新搜索设备", 14f, panelFocused) { restartService() }
         primaryLeftFocusId = refresh.id
         box.addView(refresh, LinearLayout.LayoutParams(-1, 56).apply { topMargin = 30 })
@@ -246,13 +258,21 @@ class TvMainActivity : Activity(), LanShareService.Listener {
         val dialog = AlertDialog.Builder(this)
             .setTitle("设置")
             .setMessage("设备名称")
-            .setView(box)
+            .setView(ScrollView(this).apply { addView(box) })
             .setNegativeButton("关闭", null)
             .setPositiveButton("保存") { _, _ ->
                 getSharedPreferences("settings", MODE_PRIVATE).edit().putString("device_name", input.text.toString().trim()).apply()
                 restartService()
             }
             .create()
+        box.addView(focusButton("配置发现网段", 14f, panelFocused) {
+            dialog.dismiss()
+            DiscoveryNetworkSettings.show(this, service, true)
+        }, LinearLayout.LayoutParams(-1, 58).apply { topMargin = 12 })
+        box.addView(focusButton("显示发现网段二维码", 14f, panelFocused) {
+            DiscoveryNetworkSettings.showQr(this, tv = true)
+        }, LinearLayout.LayoutParams(-1, 58).apply { topMargin = 12 })
+        box.addView(TextView(this).apply { text = "版本：${BuildConfig.VERSION_NAME}"; textSize = 12f; setTextColor(muted) })
         lateinit var loggingToggle: TextView
         loggingToggle = focusButton(if (Logcat.isEnabled()) "诊断日志：开启" else "诊断日志：关闭", 14f, panelFocused) {
             val enabled = Logcat.setEnabled(!Logcat.isEnabled())
@@ -475,7 +495,7 @@ class TvMainActivity : Activity(), LanShareService.Listener {
     private fun renderDevices() {
         if (!::devicesBox.isInitialized) return
         devicesBox.removeAllViews()
-        if (devices.isEmpty()) devicesBox.addView(TextView(this).apply { text = "暂未发现设备\n请确认连接同一个 Wi-Fi"; textSize = 16f; setTextColor(muted); setPadding(8, 30, 8, 30) })
+        if (devices.isEmpty()) devicesBox.addView(TextView(this).apply { text = "暂未发现设备\n跨网段请在设置中配置发现网段"; textSize = 16f; setTextColor(muted); setPadding(8, 30, 8, 30) })
         devices.forEachIndexed { index, device ->
             val item = TextView(this).apply {
                 id = View.generateViewId()

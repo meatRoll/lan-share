@@ -6,6 +6,9 @@ const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
 const { execFile } = require('child_process');
+const discoveryNetworks = require('./discovery-networks');
+const QRCode = require('./vendor/qrcode');
+const QRLevels = require('./vendor/qrcode/QRErrorCorrectLevel');
 
 const WEB_PORT = Number(process.env.PORT || 45880);
 const TCP_PORT = Number(process.env.TCP_PORT || 45881);
@@ -26,7 +29,8 @@ log('INFO', `session started; webPort=${WEB_PORT}; tcpPort=${TCP_PORT}; received
 const received = new Map();
 for (const name of fs.readdirSync(receivedDir)) {
   const file = path.join(receivedDir, name);
-  if (fs.statSync(file).isFile()) received.set(name, { name, size: fs.statSync(file).size, path: file });
+  const stat = fs.statSync(file);
+  if (stat.isFile()) received.set(name, { name, size: stat.size, path: file, receivedAt: stat.mtimeMs });
 }
 const MAGIC = 'LANSHARE';
 const devices = new Map();
@@ -41,11 +45,19 @@ if (!discoveryState || typeof discoveryState.id !== 'string' || !Array.isArray(d
 const desktopId = `desktop-${discoveryState.id}`;
 const knownHosts = new Set(discoveryState.hosts.filter(host => net.isIPv4(host)));
 let discoverySocket;
+let configuredNetworks;
+try { configuredNetworks = discoveryNetworks.parse(discoveryState.networks || ''); }
+catch (_) { configuredNetworks = []; }
+let networkScanTimer;
+let networkScanGeneration = 0;
+function saveDiscoveryState() {
+  fs.writeFileSync(stateFile, JSON.stringify({ id: discoveryState.id, hosts: [...knownHosts], networks: configuredNetworks.map(net => net.cidr).join('\n') }));
+}
 function rememberHost(host) {
   if (knownHosts.has(host)) return;
   knownHosts.add(host);
   log('INFO', `remembered discovery host=${host}`);
-  try { fs.writeFileSync(stateFile, JSON.stringify({ id: discoveryState.id, hosts: [...knownHosts] })); }
+  try { saveDiscoveryState(); }
   catch (error) { log('ERROR', 'discovery state save failed', error); }
 }
 function lanInterfaces() {
@@ -80,7 +92,30 @@ function sendDiscovery() {
     if (error) log('ERROR', `discovery send failed host=${host}`, error);
   });
   broadcasts.forEach(host => send(host, 'HELLO'));
-  knownHosts.forEach(host => { if (onLocalLan(host)) send(host, 'QUERY'); });
+  knownHosts.forEach(host => {
+    if (onLocalLan(host) || configuredNetworks.some(net => discoveryNetworks.contains(net, discoveryNetworks.ipv4Number(host)))) send(host, 'QUERY');
+  });
+}
+function startNetworkScan() {
+  clearTimeout(networkScanTimer);
+  const generation = ++networkScanGeneration;
+  if (!discoverySocket || !configuredNetworks.length) return;
+  const hosts = discoveryNetworks.targets(configuredNetworks, new Set(lanInterfaces().map(iface => iface.address)));
+  const batch = () => {
+    if (generation !== networkScanGeneration) return;
+    for (let index = 0; index < 10; index++) {
+      const next = hosts.next();
+      if (next.done) {
+        networkScanTimer = setTimeout(startNetworkScan, 30000);
+        return;
+      }
+      discoverySocket.send(discoveryMessage('QUERY'), DISCOVERY_PORT, next.value, error => {
+        if (error) log('ERROR', `configured network query failed host=${next.value}`, error);
+      });
+    }
+    networkScanTimer = setTimeout(batch, 100);
+  };
+  batch();
 }
 function discover() {
   const socket = dgram.createSocket('udp4');
@@ -107,9 +142,51 @@ function discover() {
     socket.setBroadcast(true);
     discoverySocket = socket;
     sendDiscovery();
+    startNetworkScan();
   });
   setInterval(() => { for (const [id, d] of devices) if (Date.now() - d.seen > 10000) devices.delete(id); }, 3000);
 }
+function discoveryQrSvg(networks) {
+  networks = discoveryNetworks.parse(networks).map(net => net.cidr).join('\n');
+  if (!networks) throw new Error('没有可分享的网段');
+  if (networks.length > 1800) throw new Error('网段过多，请分批分享二维码');
+  const qr = new QRCode(0, QRLevels.M);
+  qr.addData(`LANSHARE|NETWORKS|${networks.trim()}`);
+  qr.make();
+  const count = qr.getModuleCount();
+  const quiet = 4;
+  const size = count + quiet * 2;
+  const paths = [];
+  for (let row = 0; row < count; row++) for (let col = 0; col < count; col++) if (qr.isDark(row, col)) paths.push(`M${col + quiet} ${row + quiet}h1v1h-1z`);
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" role="img" aria-label="发现网段二维码"><rect width="100%" height="100%" fill="#f5f7ef"/><path d="${paths.join('')}" fill="#10120f"/></svg>`;
+}
+function saveNetworkSettings(req, res) {
+  let body = '';
+  let tooLarge = false;
+  req.on('data', chunk => {
+    body += chunk.toString();
+    if (body.length > 16384) { tooLarge = true; body = ''; }
+  });
+  req.on('end', () => {
+    let next;
+    try {
+      if (tooLarge) throw new Error('网段配置过长');
+      next = discoveryNetworks.parse(JSON.parse(body).networks);
+    } catch (error) { return json(res, 400, { error: error.message }); }
+    const previous = configuredNetworks;
+    configuredNetworks = next;
+    try { saveDiscoveryState(); }
+    catch (error) {
+      configuredNetworks = previous;
+      log('ERROR', 'network settings save failed', error);
+      return json(res, 500, { error: '无法保存发现网段' });
+    }
+    startNetworkScan();
+    sendDiscovery();
+    return json(res, 200, { networks: configuredNetworks.map(net => net.cidr).join('\n') });
+  });
+}
+
 function json(res, code, body) { const data = Buffer.from(JSON.stringify(body)); res.writeHead(code, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store', 'Content-Length': data.length }); res.end(data); }
 function proxy(req, res, device, targetPath) {
   log('INFO', `proxy request device=${device.id}; host=${device.host}; path=${targetPath}`);
@@ -125,7 +202,7 @@ function serveFile(req, res, file) {
     : file.endsWith('.css')
       ? 'text/css; charset=utf-8'
       : 'text/javascript; charset=utf-8';
-  res.writeHead(200, { 'Content-Type': type });
+  res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store' });
   fs.createReadStream(path.join(webRoot, file)).pipe(res);
 }
 function handler(req, res) {
@@ -142,9 +219,23 @@ function handler(req, res) {
     pending.finish(decision[2] === 'accept');
     return json(res, 200, { ok: true });
   }
-  if (url.pathname === '/api/discovery/refresh' && req.method === 'POST') { sendDiscovery(); return json(res, 200, { ok: true }); }
+  if (url.pathname === '/api/discovery/qr.svg' && req.method === 'GET') {
+    try {
+      const requested = url.searchParams.get('networks') || configuredNetworks.map(net => net.cidr).join('\n') || discoveryNetworks.localSubnets(lanInterfaces()).join('\n');
+      const networks = discoveryNetworks.parse(requested).map(net => net.cidr).join('\n');
+      const svg = Buffer.from(discoveryQrSvg(networks));
+      res.writeHead(200, { 'Content-Type': 'image/svg+xml; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Length': svg.length });
+      return res.end(svg);
+    } catch (error) { return json(res, 400, { error: error.message }); }
+  }
+  if (url.pathname === '/api/discovery/settings' && req.method === 'GET') return json(res, 200, {
+    currentNetworks: discoveryNetworks.localSubnets(lanInterfaces()),
+    networks: configuredNetworks.map(net => net.cidr).join('\n'),
+  });
+  if (url.pathname === '/api/discovery/settings' && req.method === 'POST') return saveNetworkSettings(req, res);
+  if (url.pathname === '/api/discovery/refresh' && req.method === 'POST') { sendDiscovery(); startNetworkScan(); return json(res, 200, { ok: true }); }
   if (url.pathname === '/api/devices') return json(res, 200, [...devices.values()].map(({ seen, ...device }) => device));
-  if (url.pathname === '/api/desktop/files') return json(res, 200, [...received.values()].map(file => ({ name: file.name, size: file.size, url: `/desktop-download/${encodeURIComponent(file.name)}`, locateUrl: `/desktop-locate/${encodeURIComponent(file.name)}` })));
+  if (url.pathname === '/api/desktop/files') return json(res, 200, [...received.values()].sort((a, b) => b.receivedAt - a.receivedAt).map(file => ({ name: file.name, size: file.size, url: `/desktop-download/${encodeURIComponent(file.name)}`, locateUrl: `/desktop-locate/${encodeURIComponent(file.name)}` })));
   if (url.pathname.startsWith('/desktop-locate/')) return locateDesktopFile(res, decodeURIComponent(url.pathname.slice('/desktop-locate/'.length)));
   if (url.pathname === '/desktop-upload' && req.method === 'POST') return uploadLocal(req, res);
   if (url.pathname.startsWith('/desktop-download/')) return downloadLocal(res, decodeURIComponent(url.pathname.slice('/desktop-download/'.length)));
@@ -171,11 +262,12 @@ function availableFileName(name) {
 function publishReceivedFile(temporary, requestedName, callback) {
   const name = availableFileName(requestedName);
   const file = path.join(receivedDir, name);
+  // Linking publishes the completed file without replacing an existing path.
   fs.link(temporary, file, error => {
     if (error?.code === 'EEXIST') return publishReceivedFile(temporary, requestedName, callback);
     if (error) return callback(error);
     fs.unlink(temporary, cleanupError => {
-      if (cleanupError) log('ERROR', 'temporary file cleanup failed', cleanupError);
+      if (cleanupError && typeof log === 'function') log('ERROR', 'temporary file cleanup failed', cleanupError);
       callback(null, name, file);
     });
   });
@@ -236,7 +328,7 @@ function receiveTcp(socket) {
             socket.destroy();
             return;
           }
-          received.set(finalName, { name: finalName, size: total, path: finalFile });
+          received.set(finalName, { name: finalName, size: total, path: finalFile, receivedAt: fs.statSync(finalFile).mtimeMs });
           if (typeof log === 'function') log('INFO', `received file name=${finalName}; requested=${name}; size=${total}; host=${socket.remoteAddress}`); else console.log(`Received ${finalName}: ${total} bytes`);
           socket.end('DONE\n');
         });
@@ -283,7 +375,7 @@ function uploadLocal(req, res) {
   req.on('end', () => output.end(() => {
     publishReceivedFile(temporary, requestedName, (error, name, file) => {
       if (error) { fs.rm(temporary, { force: true }, () => {}); return json(res, 500, { error: '保存文件失败' }); }
-      received.set(name, { name, size, path: file });
+      received.set(name, { name, size, path: file, receivedAt: fs.statSync(file).mtimeMs });
       log('INFO', `desktop upload saved name=${name}; requested=${requestedName}; size=${size}`);
       json(res, 201, { name, size });
     });
