@@ -46,7 +46,6 @@ class TvMainActivity : Activity(), LanShareService.Listener {
     private val storagePermissionRequestCode = 43
     private var awaitingAllFilesSettings = false
     private var fileBrowserDialog: AlertDialog? = null
-    private var currentNetworkView: TextView? = null
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
@@ -66,15 +65,6 @@ class TvMainActivity : Activity(), LanShareService.Listener {
 
     override fun onResume() {
         super.onResume()
-        currentNetworkView?.let { view ->
-            val parent = view.parent as? LinearLayout
-            if (parent != null) {
-                val index = parent.indexOfChild(view)
-                parent.removeView(view)
-                currentNetworkView = DiscoveryNetworkSettings.currentButton(this, true)
-                parent.addView(currentNetworkView, index)
-            }
-        }
         if (awaitingAllFilesSettings) {
             awaitingAllFilesSettings = false
             val granted = hasAllFilesAccess()
@@ -197,8 +187,6 @@ class TvMainActivity : Activity(), LanShareService.Listener {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(28, 24, 28, 24); background = rounded(panel, 14) }
         box.addView(TextView(this).apply { text = "本机接收中心"; textSize = 22f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE) })
         box.addView(TextView(this).apply { text = "${Build.MODEL}\n等待手机或电脑发送文件"; textSize = 16f; setTextColor(muted); setPadding(0, 14, 0, 0) })
-        currentNetworkView = DiscoveryNetworkSettings.currentButton(this, true)
-        box.addView(currentNetworkView)
         val refresh = focusButton("重新搜索设备", 14f, panelFocused) { restartService() }
         primaryLeftFocusId = refresh.id
         box.addView(refresh, LinearLayout.LayoutParams(-1, 56).apply { topMargin = 30 })
@@ -265,12 +253,12 @@ class TvMainActivity : Activity(), LanShareService.Listener {
                 restartService()
             }
             .create()
+        box.addView(TextView(this).apply { text = "本机网段"; textSize = 16f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE); setPadding(0, 18, 0, 4) })
+        box.addView(DiscoveryNetworkSettings.localNetworksPanel(this, tv = true))
+        box.addView(TextView(this).apply { text = "发现网段"; textSize = 16f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE); setPadding(0, 22, 0, 4) })
         box.addView(focusButton("配置发现网段", 14f, panelFocused) {
             dialog.dismiss()
             DiscoveryNetworkSettings.show(this, service, true)
-        }, LinearLayout.LayoutParams(-1, 58).apply { topMargin = 12 })
-        box.addView(focusButton("显示发现网段二维码", 14f, panelFocused) {
-            DiscoveryNetworkSettings.showQr(this, tv = true)
         }, LinearLayout.LayoutParams(-1, 58).apply { topMargin = 12 })
         box.addView(TextView(this).apply { text = "版本：${BuildConfig.VERSION_NAME}"; textSize = 12f; setTextColor(muted) })
         lateinit var loggingToggle: TextView

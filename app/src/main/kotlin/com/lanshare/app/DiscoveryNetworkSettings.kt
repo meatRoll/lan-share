@@ -11,6 +11,47 @@ import android.view.Gravity
 import android.widget.*
 
 object DiscoveryNetworkSettings {
+    private val lime = Color.rgb(215, 243, 107)
+
+    fun localNetworksPanel(context: Context, tv: Boolean = false): LinearLayout {
+        val networks = TextView(context).apply {
+            textSize = if (tv) 14f else 13f
+            setTextColor(lime)
+            setPadding(0, 4, 0, 4)
+        }
+        fun updateNetworks() {
+            val current = DiscoveryNetworks.localSubnets().joinToString("\n") { it.cidr }
+            networks.text = if (current.isEmpty()) "未连接 IPv4 网络" else current
+        }
+        updateNetworks()
+        val copy = Button(context).apply {
+            text = "复制网段"
+            isAllCaps = false
+            setOnClickListener {
+                val current = DiscoveryNetworks.localSubnets().joinToString("\n") { it.cidr }
+                if (current.isNotEmpty()) {
+                    (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
+                        .setPrimaryClip(ClipData.newPlainText("LanShare 当前网段", current))
+                    Toast.makeText(context, "当前网段已复制", Toast.LENGTH_SHORT).show()
+                } else Toast.makeText(context, "当前没有可复制的 IPv4 网段", Toast.LENGTH_SHORT).show()
+            }
+        }
+        val qr = Button(context).apply {
+            text = "显示网段二维码"
+            isAllCaps = false
+            setOnClickListener { showQr(context, tv = tv) }
+        }
+        return LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(networks)
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(copy, LinearLayout.LayoutParams(0, 52.dp(context), 1f))
+                addView(qr, LinearLayout.LayoutParams(0, 52.dp(context), 1f).apply { marginStart = 8.dp(context) })
+            })
+        }
+    }
+
     fun currentButton(context: Context, tv: Boolean): TextView = TextView(context).apply {
         val networks = DiscoveryNetworks.localSubnets().joinToString("\n") { it.cidr }
         text = if (networks.isEmpty()) "当前网段：未连接 IPv4 网络" else "当前网段\n$networks\n${if (tv) "按确认键复制" else "点击复制"}"
@@ -33,6 +74,8 @@ object DiscoveryNetworkSettings {
             setTextColor(if (focused) Color.rgb(13, 15, 12) else Color.rgb(215, 243, 107))
         }
     }
+
+    private fun Int.dp(context: Context): Int = (this * context.resources.displayMetrics.density).toInt()
 
     fun showQr(context: Context, networks: String? = null, tv: Boolean = false) {
         val qrNetworks = networks ?: DiscoveryNetworks.localSubnets().joinToString("\n") { it.cidr }

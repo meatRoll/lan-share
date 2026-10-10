@@ -32,14 +32,15 @@ class MatrixTests(unittest.TestCase):
         updated = BASE.replace("0.5.11", "0.5.11_feat.1").replace("versionCode=52", "versionCode=53")
         self.assertEqual(matrix(BASE, updated)["include"][0]["version"], "0.5.11_feat.1")
 
-    def test_reject_invalid_feature_suffix(self):
-        for suffix in ("_feat.0", "_feat.x", "_feat.1-extra"):
-            with self.assertRaises(ValueError):
-                matrix(BASE, BASE.replace("0.5.11", "0.5.11" + suffix).replace("versionCode=52", "versionCode=53"))
+    def test_accept_fix_and_feature_test_versions(self):
+        for suffix in ("_fix.1", "_feat.2"):
+            updated = BASE.replace("0.5.11", "0.5.11" + suffix).replace("versionCode=52", "versionCode=53")
+            self.assertEqual(matrix(BASE, updated)["include"][0]["version"], "0.5.11" + suffix)
 
-    def test_reject_suffix(self):
-        with self.assertRaises(ValueError):
-            matrix(BASE, BASE.replace("0.5.11", "0.5.12-test").replace("versionCode=52", "versionCode=53"))
+    def test_reject_invalid_suffix(self):
+        for suffix in ("_fix.0", "_feat.x", "_debug.1", "-test"):
+            with self.assertRaises(ValueError):
+                matrix(BASE, BASE.replace("0.5.11", "0.5.12" + suffix).replace("versionCode=52", "versionCode=53"))
 
 if __name__ == '__main__':
     unittest.main()

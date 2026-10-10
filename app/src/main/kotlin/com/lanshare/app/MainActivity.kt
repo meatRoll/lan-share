@@ -367,7 +367,6 @@ class MainActivity : Activity(), LanShareService.Listener {
         val root = baseLayout(); title.text = "局域网传输"
         content.addView(label("我的设备", 20))
         content.addView(rowCard(android.os.Build.MODEL ?: "Android", "在线 · 等待附近设备连接", "本机", lime, false))
-        content.addView(DiscoveryNetworkSettings.currentButton(this, false))
         content.addView(label("附近设备", 24))
         if (devices.isEmpty()) content.addView(TextView(this).apply { text = "暂未发现设备\n请确认设备网络互通；跨网段请在设置中配置发现网段"; gravity = Gravity.CENTER; setTextColor(muted); textSize = 14f; setPadding(0, 36, 0, 36) })
         devices.forEach { device ->
@@ -420,14 +419,24 @@ class MainActivity : Activity(), LanShareService.Listener {
             orientation = LinearLayout.VERTICAL
             setPadding(48, 0, 48, 0)
             addView(input)
+            addView(TextView(this@MainActivity).apply {
+                text = "本机网段"
+                setTextColor(Color.WHITE)
+                textSize = 15f
+                setPadding(0, 18.dp(), 0, 4.dp())
+            })
+            addView(DiscoveryNetworkSettings.localNetworksPanel(this@MainActivity))
+            addView(TextView(this@MainActivity).apply {
+                text = "发现网段"
+                setTextColor(Color.WHITE)
+                textSize = 15f
+                setPadding(0, 22.dp(), 0, 4.dp())
+            })
             addView(button("配置发现网段", panel, Color.WHITE).apply {
                 setOnClickListener {
                     settingsDialog.dismiss()
                     DiscoveryNetworkSettings.show(this@MainActivity, service, false)
                 }
-            }, LinearLayout.LayoutParams(-1, 52.dp()).apply { topMargin = 12.dp() })
-            addView(button("显示发现网段二维码", panel, Color.WHITE).apply {
-                setOnClickListener { settingsDialog.dismiss(); DiscoveryNetworkSettings.showQr(this@MainActivity) }
             }, LinearLayout.LayoutParams(-1, 52.dp()).apply { topMargin = 12.dp() })
             addView(button("扫描网段二维码", panel, Color.WHITE).apply {
                 setOnClickListener { settingsDialog.dismiss(); DiscoveryNetworkSettings.scan(this@MainActivity, discoveryQrRequestCode) }
