@@ -312,16 +312,26 @@ class LanShareService(private val context: Context, private val listener: Listen
         }
     }
 
+    private fun uniqueIncomingName(name: String): String {
+        val publicDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "LanShare")
+        val appDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+        val httpAppDir = appDir?.let { File(it, "LanShare") }
+        return FileNames.available(name) { candidate ->
+            listOf(publicDir, appDir, httpAppDir).filterNotNull().any { File(it, candidate).exists() }
+        }
+    }
+
     private fun saveIncoming(input: InputStream, name: String, size: Long): File {
+        val targetName = uniqueIncomingName(name)
         val resolver = context.contentResolver
-        val values = ContentValues().apply { put(MediaStore.MediaColumns.DISPLAY_NAME, name); put(MediaStore.MediaColumns.MIME_TYPE, "application/octet-stream")
+        val values = ContentValues().apply { put(MediaStore.MediaColumns.DISPLAY_NAME, targetName); put(MediaStore.MediaColumns.MIME_TYPE, "application/octet-stream")
             if (Build.VERSION.SDK_INT >= 29) { put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/LanShare"); put(MediaStore.MediaColumns.IS_PENDING, 1) } }
-        val isApk = name.lowercase().endsWith(".apk")
+        val isApk = targetName.lowercase().endsWith(".apk")
         val uri = if (!isApk && Build.VERSION.SDK_INT >= 29) resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) else null
         val downloadDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "LanShare")
         downloadDir.mkdirs()
-        val downloadFile = File(downloadDir, name)
-        val output: OutputStream = if (isApk) FileOutputStream(downloadFile) else if (uri != null) resolver.openOutputStream(uri)!! else FileOutputStream(File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), name))
+        val downloadFile = File(downloadDir, targetName)
+        val output: OutputStream = if (isApk) FileOutputStream(downloadFile) else if (uri != null) resolver.openOutputStream(uri)!! else FileOutputStream(File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), targetName))
         output.use { out -> val buffer = ByteArray(64 * 1024); var total = 0L; var n: Int
             while (size < 0 || total < size) {
                 n = input.read(buffer, 0, if (size < 0) buffer.size else minOf(buffer.size.toLong(), size - total).toInt())
@@ -333,9 +343,9 @@ class LanShareService(private val context: Context, private val listener: Listen
         }
         if (uri != null && Build.VERSION.SDK_INT >= 29) resolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
         return if (isApk) downloadFile else if (Build.VERSION.SDK_INT >= 29) {
-            File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "LanShare/$name")
+            File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "LanShare/$targetName")
         } else {
-            File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), name)
+            File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), targetName)
         }
     }
 
