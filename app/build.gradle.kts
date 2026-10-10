@@ -5,6 +5,7 @@ plugins {
 
 dependencies {
     implementation("org.jetbrains.kotlin:kotlin-stdlib:2.0.21")
+    testImplementation("junit:junit:4.13.2")
 }
 
 // Controls diagnostic capability, not its initial state. Runtime diagnostics default OFF.
