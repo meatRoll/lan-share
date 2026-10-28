@@ -30,6 +30,7 @@ jobs:
           node web/discovery.test.js
           node web/ui.test.js
           node web/receive-tcp.test.js
+          node web/desktop-send.test.js
       - id: versions
         name: Compare platform versions across this push
         env:

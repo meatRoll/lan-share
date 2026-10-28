@@ -204,7 +204,7 @@ class TvMainActivity : Activity(), LanShareService.Listener {
             setHorizontallyScrolling(false)
             ellipsize = null
         }, LinearLayout.LayoutParams(0, 60, 1f))
-        header.addView(TextView(this).apply { text = "●  本机在线"; textSize = 16f; setTextColor(lime) })
+        header.addView(TextView(this).apply { text = "●  本机在线 · ${localIp()}"; textSize = 16f; setTextColor(lime) })
         root.addView(header)
         val columns = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, 22, 0, 0) }
         columns.addView(ScrollView(this).apply { addView(infoPanel()) }, LinearLayout.LayoutParams(0, -1, 0.72f))
@@ -433,6 +433,7 @@ class TvMainActivity : Activity(), LanShareService.Listener {
         box.removeAllViews()
         if (receivedFiles.isEmpty()) box.addView(TextView(this).apply { text = "暂无接收文件"; setTextColor(muted) })
         receivedFiles.take(32).forEachIndexed { index, file ->
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
             val item = TextView(this).apply {
                 id = View.generateViewId()
                 if (index == 0) firstReceivedFocusId = id
@@ -450,8 +451,34 @@ class TvMainActivity : Activity(), LanShareService.Listener {
                 }
                 setOnClickListener { handleReceivedFileClick(file) }
             }
-            box.addView(item, LinearLayout.LayoutParams(-1, 64).apply { bottomMargin = 8 })
+            row.addView(item, LinearLayout.LayoutParams(0, 64, 1f))
+            row.addView(focusButton("发送", 14f, panelFocused) { chooseSendTarget(file) }, LinearLayout.LayoutParams(92, 58).apply { leftMargin = 8 })
+            box.addView(row, LinearLayout.LayoutParams(-1, 64).apply { bottomMargin = 8 })
         }
+    }
+
+    private fun chooseSendTarget(file: File) {
+        if (!file.isFile) { Toast.makeText(this, "文件不存在", Toast.LENGTH_LONG).show(); return }
+        if (devices.isEmpty()) { Toast.makeText(this, "暂无在线设备，请等待附近设备上线", Toast.LENGTH_LONG).show(); return }
+        if (devices.size == 1) { sendReceivedFile(file, devices.first()); return }
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(20, 0, 20, 0) }
+        val dialog = AlertDialog.Builder(this).setTitle("发送 ${file.name} 到")
+            .setView(ScrollView(this).apply { isFocusable = false; addView(list) })
+            .setNegativeButton("关闭", null).create()
+        devices.forEach { device ->
+            list.addView(fileBrowserRow("${device.name}  ·  ${device.address.hostAddress}") {
+                dialog.dismiss()
+                sendReceivedFile(file, device)
+            })
+        }
+        dialog.show()
+        list.post { list.getChildAt(0)?.requestFocus() }
+    }
+
+    private fun sendReceivedFile(file: File, device: LanShareService.Device) {
+        selected = device
+        status.text = "正在发送 ${file.name} 到 ${device.name}…"
+        service.sendLocalFile(file, device)
     }
 
     private fun handleReceivedFileClick(file: File) {
@@ -771,21 +798,11 @@ class TvMainActivity : Activity(), LanShareService.Listener {
             false
         }
         Logcat.d("install", "install requested; manufacturer=${Build.MANUFACTURER}; brand=${Build.BRAND}; model=${Build.MODEL}; sdk=${Build.VERSION.SDK_INT}; xgimiDirectInstall=$isXgimi; canRequestPackageInstalls=$canInstall; file=${file.absolutePath}")
-        // XGIMI firmware can install despite returning false and omitting the settings activity.
-        // Only skip our preflight check; the system installer still enforces its own policy.
-        if (!isXgimi && !canInstall) {
-            AlertDialog.Builder(this).setTitle("允许安装未知应用")
-                .setMessage("请在系统设置中允许 LanShare 安装应用，返回后重新点击安装 APK。")
-                .setPositiveButton("打开设置") { _, _ ->
-                    try {
-                        startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
-                    } catch (error: Exception) {
-                        Logcat.e("install permission settings", error)
-                        Toast.makeText(this, "系统不支持此授权入口，请使用系统支持的安装方式", Toast.LENGTH_LONG).show()
-                    }
-                }
-                .setNegativeButton("取消", null).show()
-            return
+        // Many TV firmwares ignore the per-app unknown-sources AppOp, or have no per-app
+        // settings screen at all. Do not block on the preflight result: try the system
+        // installer first and let its own policy decide; only guide when it cannot launch.
+        if (!canInstall) {
+            Toast.makeText(this, "如系统提示禁止安装，请在电视设置中允许未知来源应用", Toast.LENGTH_LONG).show()
         }
 
         // API 23 TV installers commonly do not resolve FileProvider content:// URIs.
@@ -815,13 +832,41 @@ class TvMainActivity : Activity(), LanShareService.Listener {
                 startActivity(fallback)
             } catch (viewError: Exception) {
                 Logcat.e("install ACTION_VIEW", viewError)
-                AlertDialog.Builder(this).setTitle("无法打开安装器")
-                    .setMessage("安装器错误：${installError.message ?: "未知错误"}\n备用方式：${viewError.message ?: "不支持"}\n文件：${file.absolutePath}")
-                    .setPositiveButton("确定", null).show()
+                showInstallerUnavailable(installError, viewError, file, canInstall)
             }
         }
     }
 
-    private fun localIp(): String = try { java.net.NetworkInterface.getNetworkInterfaces().toList().flatMap { it.inetAddresses.toList() }.firstOrNull { !it.isLoopbackAddress && it is java.net.Inet4Address }?.hostAddress ?: "设备 IP" } catch (_: Exception) { "设备 IP" }
+    private fun showInstallerUnavailable(installError: Exception, viewError: Exception, file: File, canInstall: Boolean) {
+        val message = buildString {
+            append("安装器错误：${installError.message ?: "未知错误"}")
+            append("\n备用方式：${viewError.message ?: "不支持"}")
+            append("\n文件：${file.absolutePath}")
+            append("\n\n可用电视自带文件管理器打开上述文件安装。")
+        }
+        val builder = AlertDialog.Builder(this).setTitle("无法打开安装器").setMessage(message).setNegativeButton("关闭", null)
+        if (!canInstall && Build.VERSION.SDK_INT >= 26) {
+            builder.setPositiveButton("打开设置") { _, _ ->
+                try {
+                    startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+                } catch (error: Exception) {
+                    Logcat.e("install permission settings", error)
+                    AlertDialog.Builder(this).setTitle("系统没有未知来源设置页")
+                        .setMessage("请使用电视自带文件管理器打开以下文件安装：\n${file.absolutePath}")
+                        .setPositiveButton("确定", null).show()
+                }
+            }
+        }
+        builder.show()
+    }
+
+    private fun localIp(): String = try {
+        java.net.NetworkInterface.getNetworkInterfaces().toList()
+            .filter { it.isUp && !it.isLoopback && !it.isPointToPoint }
+            .flatMap { it.inetAddresses.toList() }
+            .filterIsInstance<java.net.Inet4Address>()
+            .sortedBy { if (it.isSiteLocalAddress) 0 else 1 }
+            .firstOrNull()?.hostAddress ?: "未连接"
+    } catch (_: Exception) { "未连接" }
     private fun rounded(color: Int, radius: Int) = GradientDrawable().apply { setColor(color); cornerRadius = radius.toFloat() }
 }

@@ -16,7 +16,7 @@ const discoveryNetworks = require('./discovery-networks');
 const timeouts = [];
 const context = { Buffer, console, devices, knownHosts, discoveryNetworks, configuredNetworks: [], networkScanGeneration: 0, networkScanTimer: null,
   setTimeout(callback) { timeouts.push(callback); return timeouts.length; }, clearTimeout() {},
-  MAGIC: 'LANSHARE', desktopId: 'desktop-test', TCP_PORT: 45881,
+  MAGIC: 'LANSHARE', desktopId: 'desktop-test', desktopName: 'Web Desktop', TCP_PORT: 45881,
   DISCOVERY_PORT: 45454, dgram: { createSocket: () => socket },
   os: { networkInterfaces: () => ({ en0: [{ internal: false, family: 'IPv4', address: '192.168.3.42', netmask: '255.255.255.0' }] }) },
   rememberHost: host => knownHosts.add(host), setInterval: () => {},
@@ -24,13 +24,17 @@ const context = { Buffer, console, devices, knownHosts, discoveryNetworks, confi
 vm.createContext(context);
 vm.runInContext(source.slice(source.indexOf('function lanInterfaces'), source.indexOf('const pendingReceives')), context);
 vm.runInContext(source.slice(source.indexOf('function sendDiscovery'), source.indexOf('function json')), context);
+assert.equal(context.localAddresses().join(','), '192.168.3.42');
+assert.equal(context.normalizeDeviceName('  书房|电脑\n用户名  '), '书房 电脑 用户名');
+assert.equal(context.normalizeDeviceName(''), 'Web Desktop');
+assert.equal(Array.from(context.normalizeDeviceName('名'.repeat(60))).length, 40);
 context.discover();
 assert(sent.some(packet => packet.host === '192.168.3.255' && packet.message.includes('|HELLO|')));
 assert(sent.some(packet => packet.host === '192.168.3.54' && packet.message.includes('|QUERY|')));
 assert(!sent.some(packet => packet.host === '10.0.0.8'));
 receive(Buffer.from('LANSHARE|QUERY|phone-one|Phone|45455'), { address: '192.168.3.54', port: 45454 });
 assert.equal(devices.get('phone-one').host, '192.168.3.54');
-assert(sent.some(packet => packet.host === '192.168.3.54' && packet.port === 45454 && packet.message.includes('|HELLO|desktop-test|')));
+assert(sent.some(packet => packet.host === '192.168.3.54' && packet.port === 45454 && packet.message.includes('|HELLO|desktop-test|Web Desktop|')));
 receive(Buffer.from('LANSHARE|QUERY|phone-new-id|Phone|45455'), { address: '192.168.3.54', port: 45454 });
 assert.equal(devices.size, 1);
 const count = sent.length;
@@ -49,4 +53,7 @@ context.configuredNetworks = [];
 context.startNetworkScan();
 while (timeouts.length) timeouts.shift()();
 assert.equal(sent.length, beforeCancel, 'clearing settings cancels outstanding subnet queries');
-console.log('PASS: broadcast, known peers, cross-subnet QUERY/reply, scan cancellation, dedup and no reply loops');
+context.desktopName = '书房电脑';
+context.sendDiscovery();
+assert(sent.some(packet => packet.message.includes('|HELLO|desktop-test|书房电脑|')), 'renamed desktop should advertise its new name');
+console.log('PASS: broadcast, known peers, cross-subnet QUERY/reply, rename, scan cancellation, dedup and no reply loops');

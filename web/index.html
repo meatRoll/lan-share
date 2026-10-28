@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>LanShare Web Desktop</title><link rel="stylesheet" href="style.css"></head>
 <body><main>
-<header><div><p class="eyebrow">LOCAL NETWORK BRIDGE</p><h1>LanShare Web</h1><p>本地服务正在自动发现手机和 TV</p></div><span class="dot">● 已连接本地服务</span></header>
+<header><div><p class="eyebrow">LOCAL NETWORK BRIDGE</p><h1>LanShare Web</h1><p>本地服务正在自动发现手机和 TV</p><p id="desktopIdentity" class="identity">本机 IP：读取中…</p></div><span class="dot">● 已连接本地服务</span></header>
 <section class="network-panel">
   <div class="section-head"><h2>当前网段</h2><button id="settings" type="button">设置</button></div>
   <button id="currentNetworks" type="button" title="点击复制当前网段">正在读取网段…</button>
@@ -13,9 +13,12 @@
 <dialog id="configuredQrDialog"><h2>配置网段二维码</h2><img id="configuredQrImage" alt="配置网段二维码"><p id="configuredQrText"></p><p class="hint">可用手机 LanShare 扫描此二维码导入网段。</p><button id="closeConfiguredQr" type="button">关闭</button></dialog>
 <dialog id="networkSettings">
   <form id="networkForm">
-    <h2>发现网段</h2>
-    <p class="hint">每行一个，例如 192.168.1.0/24。支持多个私有 IPv4 网段，前缀 /20～/32，合计最多 4096 个地址。保存后立即搜索，每轮完成后等待 30 秒再次查询。留空仅使用正常广播和已知地址发现。</p>
+    <h2>本机名称与发现网段</h2>
+    <label for="deviceNameInput">本机名称</label>
+    <input id="deviceNameInput" maxlength="40" placeholder="Web Desktop">
+    <p class="hint">手机和 TV 用这个名称识别这台电脑；留空恢复默认名称 Web Desktop。</p>
     <label for="networkInput">要搜索的网段</label>
+    <p class="hint">每行一个，例如 192.168.1.0/24。支持多个私有 IPv4 网段，前缀 /20～/32，合计最多 4096 个地址。保存后立即搜索，每轮完成后等待 30 秒再次查询。留空仅使用正常广播和已知地址发现。</p>
     <textarea id="networkInput" rows="5" placeholder="192.168.1.0/24&#10;192.168.2.0/24"></textarea>
     <button id="showConfiguredQr" type="button">显示配置网段二维码</button>
     <p id="networkError" role="alert"></p>

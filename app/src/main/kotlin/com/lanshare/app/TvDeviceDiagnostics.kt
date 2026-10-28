@@ -41,8 +41,29 @@ object TvDeviceDiagnostics {
         field("buildType") { Build.TYPE }
         field("buildTags") { Build.TAGS }
         field("supportedAbis") { Build.SUPPORTED_ABIS.joinToString(",") }
+        field("targetSdk") { context.applicationInfo.targetSdkVersion }
         field("canRequestPackageInstalls") {
             if (Build.VERSION.SDK_INT >= 26) context.packageManager.canRequestPackageInstalls() else "not supported"
+        }
+        field("requestInstallPackagesAppOp") {
+            if (Build.VERSION.SDK_INT < 26) "not supported"
+            else {
+                val ops = context.getSystemService(Context.APP_OPS_SERVICE) as android.app.AppOpsManager
+                val uid = android.os.Process.myUid()
+                val mode = if (Build.VERSION.SDK_INT >= 29) {
+                    ops.unsafeCheckOpNoThrow("android:request_install_packages", uid, context.packageName)
+                } else {
+                    @Suppress("DEPRECATION")
+                    ops.checkOpNoThrow("android:request_install_packages", uid, context.packageName)
+                }
+                when (mode) {
+                    android.app.AppOpsManager.MODE_ALLOWED -> "MODE_ALLOWED"
+                    android.app.AppOpsManager.MODE_IGNORED -> "MODE_IGNORED"
+                    android.app.AppOpsManager.MODE_ERRORED -> "MODE_ERRORED"
+                    android.app.AppOpsManager.MODE_DEFAULT -> "MODE_DEFAULT"
+                    else -> "mode=$mode"
+                }
+            }
         }
         field("unknownAppSourcesHandler") {
             val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))

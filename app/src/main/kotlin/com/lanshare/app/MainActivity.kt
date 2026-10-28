@@ -422,7 +422,7 @@ class MainActivity : Activity(), LanShareService.Listener {
         content.addView(label("已接收文件", 20))
         if (receivedFiles.isEmpty()) content.addView(TextView(this).apply { text = "暂无接收文件"; setTextColor(muted); textSize = 13f; setPadding(4, 0, 4, 12) })
         receivedFiles.take(8).forEach { file ->
-            val item = rowCard(file.name, formatSize(file.length()), if (file.extension.equals("apk", true)) "APK" else "文件", Color.rgb(170, 200, 120), true)
+            val item = rowCard(file.name, formatSize(file.length()), if (file.extension.equals("apk", true)) "APK" else "文件", Color.rgb(170, 200, 120), true, "发送") { sendReceivedFile(file) }
             item.setOnClickListener { handleReceivedFileClick(file) }
             content.addView(item)
         }
@@ -464,7 +464,10 @@ class MainActivity : Activity(), LanShareService.Listener {
         val top = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(20, 18, 20, 8) }
         title = TextView(this).apply { setTextColor(Color.WHITE); textSize = 25f; typeface = android.graphics.Typeface.DEFAULT_BOLD }
         top.addView(title, LinearLayout.LayoutParams(0, 56.dp(), 1f))
-        top.addView(TextView(this).apply { text = "●  在线"; setTextColor(lime); textSize = 13f })
+        val statusBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.END }
+        statusBox.addView(TextView(this).apply { text = "●  在线"; setTextColor(lime); textSize = 13f })
+        statusBox.addView(TextView(this).apply { text = localIp(); setTextColor(muted); textSize = 11f })
+        top.addView(statusBox)
         outer.addView(top)
         content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(20, 0, 20, 0) }
         outer.addView(ScrollView(this).apply { addView(content) }, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -646,10 +649,58 @@ class MainActivity : Activity(), LanShareService.Listener {
 
     private fun navButton(text: String, action: () -> Unit) = TextView(this).apply { this.text = text; gravity = Gravity.CENTER; textSize = 14f; setTextColor(Color.WHITE); setOnClickListener { action() } }
     private fun label(text: String, top: Int) = TextView(this).apply { this.text = text; textSize = 13f; setTextColor(muted); setPadding(4, top.dp(), 4, 10) }
-    private fun rowCard(name: String, detail: String, badge: String, badgeColor: Int, arrow: Boolean): LinearLayout { val row = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(14, 12, 14, 12); background = rounded(panel, 14); isFocusable = arrow; isClickable = arrow }; row.addView(TextView(this).apply { text = badge; gravity = Gravity.CENTER; textSize = 11f; setTextColor(bg); background = rounded(badgeColor, 10) }, LinearLayout.LayoutParams(54.dp(), 46.dp())); val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(14, 0, 8, 0) }; texts.addView(TextView(this).apply { text = name; textSize = 16f; setTextColor(Color.WHITE) }); texts.addView(TextView(this).apply { text = detail; textSize = 12f; setTextColor(muted); setPadding(0, 4, 0, 0) }); row.addView(texts, LinearLayout.LayoutParams(0, -2, 1f)); if (arrow) row.addView(TextView(this).apply { text = "›"; textSize = 28f; setTextColor(muted) }); row.layoutParams = LinearLayout.LayoutParams(-1, 70.dp()).apply { bottomMargin = 10.dp() }; return row }
+    private fun rowCard(name: String, detail: String, badge: String, badgeColor: Int, arrow: Boolean, actionLabel: String? = null, onAction: (() -> Unit)? = null): LinearLayout {
+        val row = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(14, 12, 14, 12); background = rounded(panel, 14); isFocusable = arrow; isClickable = arrow }
+        row.addView(TextView(this).apply { text = badge; gravity = Gravity.CENTER; textSize = 11f; setTextColor(bg); background = rounded(badgeColor, 10) }, LinearLayout.LayoutParams(54.dp(), 46.dp()))
+        val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(14, 0, 8, 0) }
+        texts.addView(TextView(this).apply { text = name; textSize = 16f; setTextColor(Color.WHITE) })
+        texts.addView(TextView(this).apply { text = detail; textSize = 12f; setTextColor(muted); setPadding(0, 4, 0, 0) })
+        row.addView(texts, LinearLayout.LayoutParams(0, -2, 1f))
+        if (actionLabel != null && onAction != null) {
+            row.addView(TextView(this).apply {
+                text = actionLabel
+                gravity = Gravity.CENTER
+                textSize = 13f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(bg)
+                background = rounded(lime, 10)
+                isFocusable = true
+                isClickable = true
+                setPadding(16, 0, 16, 0)
+                setOnClickListener { onAction() }
+            }, LinearLayout.LayoutParams(-2, 42.dp()).apply { rightMargin = 8.dp() })
+        }
+        if (arrow) row.addView(TextView(this).apply { text = "›"; textSize = 28f; setTextColor(muted) })
+        row.layoutParams = LinearLayout.LayoutParams(-1, 70.dp()).apply { bottomMargin = 10.dp() }
+        return row
+    }
+
+    private fun sendReceivedFile(file: File) {
+        if (!file.isFile) { Toast.makeText(this, "文件不存在", Toast.LENGTH_SHORT).show(); return }
+        if (devices.isEmpty()) { Toast.makeText(this, "暂无在线设备，请等待附近设备上线", Toast.LENGTH_SHORT).show(); return }
+        if (devices.size == 1) { sendReceivedFileTo(file, devices.first()); return }
+        val targets = devices
+        AlertDialog.Builder(this).setTitle("发送 ${file.name} 到")
+            .setItems(targets.map { "${it.name}  ·  ${it.address.hostAddress}" }.toTypedArray()) { _, which -> sendReceivedFileTo(file, targets[which]) }
+            .setNegativeButton("取消", null).show()
+    }
+
+    private fun sendReceivedFileTo(file: File, device: LanShareService.Device) {
+        selected = device
+        status = "正在发送 ${file.name} 到 ${device.name}…"
+        service.sendLocalFile(file, device)
+        showHome()
+    }
     private fun button(text: String, color: Int, textColor: Int) = TextView(this).apply { this.text = text; gravity = Gravity.CENTER; textSize = 16f; typeface = android.graphics.Typeface.DEFAULT_BOLD; setTextColor(textColor); background = rounded(color, 14) }
     private fun rounded(color: Int, radius: Int) = GradientDrawable().apply { setColor(color); cornerRadius = radius.dp().toFloat() }
     private fun formatSize(size: Long) = if (size < 0) "未知" else if (size < 1024 * 1024) "${size / 1024} KB" else "%.1f MB".format(size / 1024f / 1024f)
-    private fun localIp(): String = try { java.net.NetworkInterface.getNetworkInterfaces().toList().flatMap { it.inetAddresses.toList() }.firstOrNull { !it.isLoopbackAddress && it is java.net.Inet4Address }?.hostAddress ?: "设备 IP" } catch (_: Exception) { "设备 IP" }
+    private fun localIp(): String = try {
+        java.net.NetworkInterface.getNetworkInterfaces().toList()
+            .filter { it.isUp && !it.isLoopback && !it.isPointToPoint }
+            .flatMap { it.inetAddresses.toList() }
+            .filterIsInstance<java.net.Inet4Address>()
+            .sortedBy { if (it.isSiteLocalAddress) 0 else 1 }
+            .firstOrNull()?.hostAddress ?: "未连接"
+    } catch (_: Exception) { "未连接" }
     private fun Int.dp() = (this * resources.displayMetrics.density).toInt()
 }

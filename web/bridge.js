@@ -43,6 +43,7 @@ if (!discoveryState || typeof discoveryState.id !== 'string' || !Array.isArray(d
   discoveryState = { id: require('crypto').randomUUID(), hosts: [] };
 }
 const desktopId = `desktop-${discoveryState.id}`;
+let desktopName = normalizeDeviceName(discoveryState.name);
 const knownHosts = new Set(discoveryState.hosts.filter(host => net.isIPv4(host)));
 let discoverySocket;
 let configuredNetworks;
@@ -51,7 +52,7 @@ catch (_) { configuredNetworks = []; }
 let networkScanTimer;
 let networkScanGeneration = 0;
 function saveDiscoveryState() {
-  fs.writeFileSync(stateFile, JSON.stringify({ id: discoveryState.id, hosts: [...knownHosts], networks: configuredNetworks.map(net => net.cidr).join('\n') }));
+  fs.writeFileSync(stateFile, JSON.stringify({ id: discoveryState.id, name: desktopName, hosts: [...knownHosts], networks: configuredNetworks.map(net => net.cidr).join('\n') }));
 }
 function rememberHost(host) {
   if (knownHosts.has(host)) return;
@@ -64,12 +65,20 @@ function lanInterfaces() {
   return Object.values(os.networkInterfaces()).flat().filter(iface => iface && !iface.internal && iface.family === 'IPv4');
 }
 function ipv4Number(ip) { return ip.split('.').reduce((value, part) => (value << 8) | Number(part), 0) >>> 0; }
+function localAddresses() {
+  return [...new Set(lanInterfaces().map(iface => iface.address))].sort((a, b) => ipv4Number(a) - ipv4Number(b));
+}
 function onLocalLan(host) {
   return lanInterfaces().some(iface => (ipv4Number(host) & ipv4Number(iface.netmask)) === (ipv4Number(iface.address) & ipv4Number(iface.netmask)));
 }
-function discoveryMessage(kind) { return Buffer.from(`${MAGIC}|${kind}|${desktopId}|Web Desktop|${TCP_PORT}`); }
+function normalizeDeviceName(value) {
+  const cleaned = String(value ?? '').replace(/[\p{Cc}\p{Cf}|]/gu, ' ').replace(/\s+/gu, ' ').trim();
+  return Array.from(cleaned).slice(0, 40).join('').trim() || 'Web Desktop';
+}
+function discoveryMessage(kind) { return Buffer.from(`${MAGIC}|${kind}|${desktopId}|${desktopName}|${TCP_PORT}`); }
 const pendingReceives = new Map();
 const activeReceives = new Map();
+const activeSends = new Map();
 function failTransfer(transfer, message) {
   if (!transfer) return;
   transfer.status = 'failed';
@@ -172,27 +181,34 @@ function discoveryQrSvg(networks) {
 function saveNetworkSettings(req, res) {
   let body = '';
   let tooLarge = false;
+  req.setEncoding('utf8');
   req.on('data', chunk => {
     body += chunk.toString();
     if (body.length > 16384) { tooLarge = true; body = ''; }
   });
   req.on('end', () => {
     let next;
+    let nextName;
     try {
-      if (tooLarge) throw new Error('网段配置过长');
-      next = discoveryNetworks.parse(JSON.parse(body).networks);
+      if (tooLarge) throw new Error('设置过长');
+      const payload = JSON.parse(body);
+      next = discoveryNetworks.parse(payload.networks);
+      nextName = payload.name === undefined ? desktopName : normalizeDeviceName(payload.name);
     } catch (error) { return json(res, 400, { error: error.message }); }
     const previous = configuredNetworks;
+    const previousName = desktopName;
     configuredNetworks = next;
+    desktopName = nextName;
     try { saveDiscoveryState(); }
     catch (error) {
       configuredNetworks = previous;
+      desktopName = previousName;
       log('ERROR', 'network settings save failed', error);
-      return json(res, 500, { error: '无法保存发现网段' });
+      return json(res, 500, { error: '无法保存设置' });
     }
     startNetworkScan();
     sendDiscovery();
-    return json(res, 200, { networks: configuredNetworks.map(net => net.cidr).join('\n') });
+    return json(res, 200, { networks: configuredNetworks.map(net => net.cidr).join('\n'), name: desktopName });
   });
 }
 
@@ -221,7 +237,10 @@ function handler(req, res) {
   if (url.pathname === '/' || url.pathname === '/index.html') return serveFile(req, res, 'index.html');
   if (url.pathname === '/app.js' || url.pathname === '/style.css') return serveFile(req, res, url.pathname.slice(1));
   if (url.pathname === '/api/receives') return json(res, 200, [...pendingReceives.values()].map(({ finish, ...request }) => request));
-  if (url.pathname === '/api/transfers') return json(res, 200, [...activeReceives.values()].map(({ updatedAt, ...transfer }) => transfer));
+  if (url.pathname === '/api/transfers') return json(res, 200, [
+    ...[...activeReceives.values()].map(({ updatedAt, ...transfer }) => ({ ...transfer, direction: 'receive' })),
+    ...[...activeSends.values()].map(({ updatedAt, ...transfer }) => ({ ...transfer, direction: 'send' })),
+  ]);
   const decision = url.pathname.match(/^\/api\/receives\/([^/]+)\/(accept|reject)$/);
   if (decision && req.method === 'POST') {
     const pending = pendingReceives.get(decision[1]);
@@ -240,12 +259,15 @@ function handler(req, res) {
   }
   if (url.pathname === '/api/discovery/settings' && req.method === 'GET') return json(res, 200, {
     currentNetworks: discoveryNetworks.localSubnets(lanInterfaces()),
+    addresses: localAddresses(),
     networks: configuredNetworks.map(net => net.cidr).join('\n'),
+    name: desktopName,
   });
   if (url.pathname === '/api/discovery/settings' && req.method === 'POST') return saveNetworkSettings(req, res);
   if (url.pathname === '/api/discovery/refresh' && req.method === 'POST') { sendDiscovery(); startNetworkScan(); return json(res, 200, { ok: true }); }
   if (url.pathname === '/api/devices') return json(res, 200, [...devices.values()].map(({ seen, ...device }) => device));
   if (url.pathname === '/api/desktop/files') return json(res, 200, [...received.values()].sort((a, b) => b.receivedAt - a.receivedAt).map(file => ({ name: file.name, size: file.size, url: `/desktop-download/${encodeURIComponent(file.name)}`, locateUrl: `/desktop-locate/${encodeURIComponent(file.name)}` })));
+  if (url.pathname === '/api/desktop/send' && req.method === 'POST') return sendDesktopFile(req, res);
   if (url.pathname.startsWith('/desktop-locate/')) return locateDesktopFile(res, decodeURIComponent(url.pathname.slice('/desktop-locate/'.length)));
   if (url.pathname === '/desktop-upload' && req.method === 'POST') return uploadLocal(req, res);
   if (url.pathname.startsWith('/desktop-download/')) return downloadLocal(res, decodeURIComponent(url.pathname.slice('/desktop-download/'.length)));
@@ -375,6 +397,87 @@ function receiveTcp(socket) {
     });
   });
 }
+function startDesktopSend(device, file) {
+  const stat = fs.statSync(file.path);
+  const id = require('crypto').randomUUID();
+  const transfer = { id, direction: 'send', name: file.name, size: stat.size, received: 0, status: 'sending', startedAt: Date.now(), updatedAt: Date.now() };
+  activeSends.set(id, transfer);
+  const finish = (status, error) => {
+    if (transfer.status !== 'sending') return;
+    transfer.status = status;
+    transfer.updatedAt = Date.now();
+    if (status === 'done') transfer.received = stat.size;
+    if (error) transfer.error = error;
+    log(status === 'done' ? 'INFO' : 'ERROR', `desktop send ${status} name=${file.name}; device=${device.id}; size=${stat.size}${error ? `; error=${error}` : ''}`);
+    const timer = setTimeout(() => activeSends.delete(id), 8000);
+    if (timer.unref) timer.unref();
+  };
+  const input = fs.createReadStream(file.path);
+  const request = http.request({
+    host: device.host,
+    port: device.webPort || 45888,
+    path: '/upload',
+    method: 'POST',
+    headers: {
+      'X-Filename': encodeURIComponent(file.name),
+      'Content-Type': 'application/octet-stream',
+      'Content-Length': stat.size,
+      Connection: 'close',
+    },
+  }, response => {
+    let body = '';
+    response.setEncoding('utf8');
+    response.on('data', chunk => { if (body.length < 4096) body += chunk; });
+    response.on('end', () => {
+      const status = response.statusCode || 0;
+      if (status >= 200 && status < 300) return finish('done');
+      finish('failed', sendResponseError(body, status));
+    });
+    response.on('error', error => finish('failed', `读取设备响应失败：${error.message}`));
+  });
+  request.setTimeout(75000, () => request.destroy(new Error('等待接收确认超时')));
+  input.on('error', error => request.destroy(error));
+  request.on('error', error => { input.destroy(); finish('failed', `发送失败：${error.message}`); });
+  input.on('data', chunk => { transfer.received += chunk.length; transfer.updatedAt = Date.now(); });
+  input.pipe(request);
+  return transfer;
+}
+
+function sendResponseError(body, status) {
+  const text = (body || '').trim();
+  if (text) {
+    try {
+      const result = JSON.parse(text);
+      if (result.error) return result.error;
+    } catch (_) { }
+    if (text.length <= 120) return text;
+  }
+  return `目标设备拒绝接收（${status}）`;
+}
+
+function sendDesktopFile(req, res) {
+  let body = '';
+  req.setEncoding('utf8');
+  req.on('data', chunk => { body += chunk; if (body.length > 4096) req.destroy(); });
+  req.on('end', () => {
+    let payload;
+    try { payload = JSON.parse(body); } catch (_) { return json(res, 400, { error: '无效请求' }); }
+    if (!payload || typeof payload.name !== 'string' || typeof payload.deviceId !== 'string') return json(res, 400, { error: '无效请求' });
+    const file = received.get(payload.name) || received.get(safeName(payload.name));
+    if (!file || !fs.existsSync(file.path)) return json(res, 404, { error: '文件不存在' });
+    const device = devices.get(payload.deviceId);
+    if (!device) return json(res, 404, { error: '设备未发现' });
+    try {
+      const transfer = startDesktopSend(device, file);
+      return json(res, 202, { id: transfer.id, name: file.name, deviceId: device.id });
+    } catch (error) {
+      log('ERROR', `desktop send start failed name=${payload.name}`, error);
+      return json(res, 500, { error: `无法读取文件: ${error.message}` });
+    }
+  });
+  req.on('error', error => log('ERROR', 'desktop send request failed', error));
+}
+
 discover(); setInterval(sendDiscovery, 3000); sendDiscovery();
 http.createServer(handler).listen(WEB_PORT, '127.0.0.1', () => console.log(`LanShare Web Desktop: http://127.0.0.1:${WEB_PORT}`));
 net.createServer({ allowHalfOpen: true }, receiveTcp).listen(TCP_PORT, '0.0.0.0', () => console.log(`LanShare desktop receiver: TCP ${TCP_PORT}`));

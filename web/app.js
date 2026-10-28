@@ -1,4 +1,5 @@
 let target = null;
+let knownDevices = [];
 let deviceRenderKey = null;
 
 function reportClientLog(level, message, error) {
@@ -141,9 +142,9 @@ async function loadTransfers() {
     if (!response.ok) throw new Error('无法读取传输进度');
     const next = await response.json();
     transferLoadError = null;
-    const hadActive = remoteTransfers.some(transfer => transfer.status === 'receiving' || transfer.status === 'saving');
-    remoteTransfers = next.map(transfer => ({ ...transfer, direction: 'receive' }));
-    const hasActive = remoteTransfers.some(transfer => transfer.status === 'receiving' || transfer.status === 'saving');
+    const hadActive = remoteTransfers.some(transfer => transfer.direction !== 'send' && (transfer.status === 'receiving' || transfer.status === 'saving'));
+    remoteTransfers = next.map(transfer => ({ ...transfer, direction: transfer.direction === 'send' ? 'send' : 'receive' }));
+    const hasActive = remoteTransfers.some(transfer => transfer.direction !== 'send' && (transfer.status === 'receiving' || transfer.status === 'saving'));
     if (hadActive && !hasActive) loadFiles();
     scheduleTransferRender();
   } catch (error) {
@@ -157,6 +158,7 @@ async function loadDevices() {
     const response = await fetch("/api/devices");
     const discoveredDevices = await response.json();
     const allDevices = discoveredDevices;
+    knownDevices = allDevices;
     if (target && !allDevices.some(device => device.id === target.id)) {
       target = null;
       $("#targetHint").textContent = "目标设备已离线，请重新选择";
@@ -208,11 +210,15 @@ async function loadFiles() {
                 <div class="file-size">${formatSize(file.size)}</div>
               </div>
               <a class="download" href="${downloadUrl}">下载</a>
+              <button class="send-file" type="button" data-name="${escapeHtml(file.name)}">发送</button>
               <button class="locate" data-url="${file.locateUrl}">打开位置</button>
             </div>
           `;
         }).join("")
       : '<p class="muted">暂无文件</p>';
+    files.querySelectorAll('.send-file').forEach(button => {
+      button.onclick = () => chooseSendDevice(button.dataset.name);
+    });
     files.querySelectorAll('.locate').forEach(button => {
       button.onclick = async () => {
         const response = await fetch(button.dataset.url);
@@ -222,6 +228,54 @@ async function loadFiles() {
   } catch (error) {
     reportClientLog('ERROR', 'load files failed', error);
     files.innerHTML = '<p class="muted">无法读取已接收文件</p>';
+  }
+}
+
+const sendDialog = document.createElement('dialog');
+const sendTitle = document.createElement('h2');
+const sendTargets = document.createElement('div');
+sendTargets.className = 'device-list';
+const cancelSend = document.createElement('button');
+cancelSend.type = 'button';
+cancelSend.textContent = '取消';
+sendDialog.append(sendTitle, sendTargets, cancelSend);
+document.body.append(sendDialog);
+cancelSend.onclick = () => sendDialog.close();
+
+function chooseSendDevice(name) {
+  if (!knownDevices.length) { status.textContent = '暂无在线设备，请保持手机或 TV 上的 LanShare 打开'; return; }
+  if (knownDevices.length === 1) { sendDesktopFile(name, knownDevices[0]); return; }
+  sendTitle.textContent = `发送 ${name} 到`;
+  sendTargets.innerHTML = knownDevices.map(device => `
+    <button type="button" class="device send-target" data-id="${escapeHtml(device.id)}">
+      <b>${escapeHtml(device.name)}</b>
+      <small>${escapeHtml(device.host)}</small>
+    </button>`).join('');
+  sendTargets.querySelectorAll('.send-target').forEach(button => {
+    button.onclick = () => {
+      const device = knownDevices.find(item => item.id === button.dataset.id);
+      sendDialog.close();
+      if (device) sendDesktopFile(name, device);
+    };
+  });
+  sendDialog.showModal();
+}
+
+async function sendDesktopFile(name, device) {
+  if (!device) return;
+  try {
+    status.textContent = `正在发送 ${name} 到 ${device.name}…`;
+    const response = await fetch('/api/desktop/send', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, deviceId: device.id }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `发送失败（${response.status}）`);
+    status.textContent = `已通知 ${device.name} 接收 ${name}`;
+    loadTransfers();
+  } catch (error) {
+    reportClientLog('ERROR', 'desktop resend failed', error);
+    status.textContent = error.message;
   }
 }
 
@@ -291,14 +345,22 @@ function uploadResponseError(xhr) {
 }
 
 let currentNetworks = [];
+let currentAddresses = [];
 let savedNetworks = '';
+let desktopName = 'Web Desktop';
+function renderDesktopIdentity() {
+  $('#desktopIdentity').textContent = `本机：${desktopName} · ${currentAddresses.length ? `IP ${currentAddresses.join(' / ')}` : '未连接 IPv4 网络'}`;
+}
 async function loadNetworkSettings() {
   try {
     const response = await fetch('/api/discovery/settings');
     if (!response.ok) throw new Error('无法读取网段设置');
     const settings = await response.json();
     currentNetworks = settings.currentNetworks || [];
+    currentAddresses = settings.addresses || [];
     savedNetworks = settings.networks || '';
+    desktopName = settings.name || 'Web Desktop';
+    renderDesktopIdentity();
     $('#currentNetworks').textContent = currentNetworks.join(' · ') || '未连接 IPv4 网络';
     $('#currentNetworks').disabled = !currentNetworks.length;
     const qrNetworks = savedNetworks || currentNetworks.join('\n');
@@ -331,10 +393,11 @@ $('#showConfiguredQr').onclick = async () => {
 $('#closeConfiguredQr').onclick = () => $('#configuredQrDialog').close();
 $('#settings').onclick = async () => {
   await loadNetworkSettings();
+  $('#deviceNameInput').value = desktopName;
   $('#networkInput').value = savedNetworks;
   $('#networkError').textContent = '';
   $('#networkSettings').showModal();
-  $('#networkInput').focus();
+  $('#deviceNameInput').focus();
 };
 $('#cancelNetworkSettings').onclick = () => $('#networkSettings').close();
 $('#addCurrentNetwork').onclick = () => {
@@ -345,13 +408,15 @@ $('#networkForm').onsubmit = async event => {
   try {
     const response = await fetch('/api/discovery/settings', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ networks: $('#networkInput').value }),
+      body: JSON.stringify({ networks: $('#networkInput').value, name: $('#deviceNameInput').value }),
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || '保存失败');
     savedNetworks = result.networks;
+    desktopName = result.name || desktopName;
+    renderDesktopIdentity();
     $('#networkSettings').close();
-    status.textContent = '发现网段已保存，正在搜索';
+    status.textContent = '本机名称与发现网段已保存，正在搜索';
     await loadDevices();
   } catch (error) { $('#networkError').textContent = error.message; }
 };
