@@ -11,7 +11,8 @@ const { once } = require('node:events');
   const source = fs.readFileSync(path.join(__dirname, 'bridge.js'), 'utf8');
   const functions = source.slice(source.indexOf('function safeName'), source.indexOf('discover();'));
   const received = new Map();
-  const context = { fs, path, require, console, Buffer, receivedDir: dir, received, MAGIC: 'LANSHARE',
+  const activeReceives = new Map();
+  const context = { fs, path, require, console, Buffer, receivedDir: dir, received, activeReceives, setTimeout, MAGIC: 'LANSHARE',
     requestReceive: (name, size, host, decide) => {
       setImmediate(() => decide(name !== 'reject.txt'));
       return () => {};
@@ -52,6 +53,7 @@ const { once } = require('node:events');
       assert.equal(fs.readFileSync(path.join(dir, name), 'utf8'), content);
       assert.equal(received.get(name).size, Buffer.byteLength(content));
     }));
+    assert.equal(activeReceives.size, 0);
     const duplicate = net.connect(server.address().port, '127.0.0.1');
     const duplicateClosed = once(duplicate, 'close');
     await once(duplicate, 'connect');
@@ -83,6 +85,30 @@ const { once } = require('node:events');
     assert.deepEqual(new Set(['normal (2).txt', 'normal (3).txt'].map(name => fs.readFileSync(path.join(dir, name), 'utf8'))), new Set(['second copy', 'third copy']));
     assert.equal(fs.readFileSync(path.join(dir, 'normal.txt'), 'utf8'), 'hello desktop');
     assert.equal(fs.readFileSync(path.join(dir, 'normal (1).txt'), 'utf8'), 'replacement');
+    const progressName = 'progress.txt';
+    const progress = net.connect(server.address().port, '127.0.0.1');
+    progress.setTimeout(2000, () => progress.destroy(new Error('progress receive timeout')));
+    const progressClosed = once(progress, 'close');
+    await once(progress, 'connect');
+    progress.write(`LANSHARE|FILE|${progressName}|11\n`);
+    const [progressAccept] = await once(progress, 'data');
+    assert.equal(progressAccept.toString(), 'ACCEPT\n');
+    progress.write('hello');
+    let active;
+    for (let attempt = 0; attempt < 50 && (!active || active.received === 0); attempt++) {
+      await new Promise(resolve => setImmediate(resolve));
+      active = [...activeReceives.values()].find(transfer => transfer.name === progressName);
+    }
+    assert.ok(active, 'active receive progress should be published');
+    assert.equal(active.received, 5);
+    assert.equal(active.size, 11);
+    const progressDone = once(progress, 'data');
+    progress.end(' world');
+    const [progressSaved] = await progressDone;
+    assert.equal(progressSaved.toString(), 'DONE\n');
+    await progressClosed;
+    assert.equal(fs.readFileSync(path.join(dir, progressName), 'utf8'), 'hello world');
+    assert.equal(activeReceives.size, 0);
     const rejected = net.connect(server.address().port, '127.0.0.1');
     const rejectedClosed = once(rejected, 'close');
     await once(rejected, 'connect');

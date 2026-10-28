@@ -6,6 +6,7 @@ import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.Build
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.Socket
@@ -13,6 +14,7 @@ import java.util.concurrent.Executors
 
 /** Observes local network changes only; never scans unrelated hosts or sends diagnostics externally. */
 class NetworkDiagnostics(context: Context) {
+    private val appContext = context.applicationContext
     private val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     private val worker = Executors.newSingleThreadExecutor()
     @Volatile private var stopped = false
@@ -53,10 +55,12 @@ class NetworkDiagnostics(context: Context) {
             if (!stopped && Logcat.isEnabled()) {
                 val start = System.currentTimeMillis()
                 try {
+                    val target = InetAddress.getByName(host)
                     Socket().use { socket ->
                         activeSocket = socket
                         if (stopped || !Logcat.isEnabled()) return@use
-                        socket.connect(InetSocketAddress(host, port), 2500)
+                        LanNetwork.bind(socket, appContext, target)
+                        socket.connect(InetSocketAddress(target, port), 2500)
                         Logcat.d("network probe", "TCP $host:$port reachable; local=${socket.localAddress.hostAddress}; elapsed=${System.currentTimeMillis() - start}ms")
                     }
                 } catch (e: Exception) { Logcat.d("network probe", "TCP $host:$port failed: ${e.javaClass.simpleName}: ${e.message}") }

@@ -69,6 +69,15 @@ function onLocalLan(host) {
 }
 function discoveryMessage(kind) { return Buffer.from(`${MAGIC}|${kind}|${desktopId}|Web Desktop|${TCP_PORT}`); }
 const pendingReceives = new Map();
+const activeReceives = new Map();
+function failTransfer(transfer, message) {
+  if (!transfer) return;
+  transfer.status = 'failed';
+  transfer.error = message;
+  transfer.updatedAt = Date.now();
+  const timer = setTimeout(() => activeReceives.delete(transfer.id), 8000);
+  if (timer.unref) timer.unref();
+}
 function requestReceive(name, size, host, decide) {
   const id = require('crypto').randomUUID();
   const timer = setTimeout(() => finish(false), 25000);
@@ -212,6 +221,7 @@ function handler(req, res) {
   if (url.pathname === '/' || url.pathname === '/index.html') return serveFile(req, res, 'index.html');
   if (url.pathname === '/app.js' || url.pathname === '/style.css') return serveFile(req, res, url.pathname.slice(1));
   if (url.pathname === '/api/receives') return json(res, 200, [...pendingReceives.values()].map(({ finish, ...request }) => request));
+  if (url.pathname === '/api/transfers') return json(res, 200, [...activeReceives.values()].map(({ updatedAt, ...transfer }) => transfer));
   const decision = url.pathname.match(/^\/api\/receives\/([^/]+)\/(accept|reject)$/);
   if (decision && req.method === 'POST') {
     const pending = pendingReceives.get(decision[1]);
@@ -282,11 +292,13 @@ function receiveTcp(socket) {
   let output;
   let finished = false;
   let temporary;
+  let transfer;
   let cancelConfirmation = () => {};
   const fail = error => {
     if (finished) return;
     finished = true;
     cancelConfirmation();
+    failTransfer(transfer, error.message || String(error));
     log('ERROR', 'tcp receive failed', error);
     if (output) {
       output.destroy();
@@ -313,6 +325,8 @@ function receiveTcp(socket) {
       socket.end('REJECT\n');
       return;
     }
+    transfer = { id: require('crypto').randomUUID(), name, size: expected, received: 0, host: socket.remoteAddress, status: 'receiving', startedAt: Date.now(), updatedAt: Date.now() };
+    activeReceives.set(transfer.id, transfer);
     temporary = file + '.' + require('crypto').randomUUID() + '.part';
     output = fs.createWriteStream(temporary);
     output.on('error', fail);
@@ -320,15 +334,18 @@ function receiveTcp(socket) {
     const complete = () => {
       if (finished) return;
       finished = true;
+      if (transfer) { transfer.received = total; transfer.status = 'saving'; transfer.updatedAt = Date.now(); }
       output.end(() => {
         publishReceivedFile(temporary, name, (error, finalName, finalFile) => {
           if (error) {
             log('ERROR', 'tcp save failed', error);
+            failTransfer(transfer, '保存文件失败');
             fs.rm(temporary, { force: true }, () => {});
             socket.destroy();
             return;
           }
           received.set(finalName, { name: finalName, size: total, path: finalFile, receivedAt: fs.statSync(finalFile).mtimeMs });
+          if (transfer) activeReceives.delete(transfer.id);
           if (typeof log === 'function') log('INFO', `received file name=${finalName}; requested=${name}; size=${total}; host=${socket.remoteAddress}`); else console.log(`Received ${finalName}: ${total} bytes`);
           socket.end('DONE\n');
         });
@@ -338,6 +355,7 @@ function receiveTcp(socket) {
       if (finished) return;
       if (expected >= 0 && total + chunk.length > expected) return fail(new Error('数据超过声明长度'));
       total += chunk.length;
+      if (transfer) { transfer.received = total; transfer.updatedAt = Date.now(); }
       if (!output.write(chunk)) {
         socket.pause();
         output.once('drain', () => socket.resume());

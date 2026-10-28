@@ -13,13 +13,14 @@ let savedNetworks = '192.168.211.0/24';
 let copiedText;
 const context = {
   navigator: { clipboard: { async writeText(text) { copiedText = text; } } },
-  console, setInterval(fn) { timers.push(fn); },
+  console, setInterval(fn) { timers.push(fn); }, setTimeout,
   window: { addEventListener() {} },
   document: {
     querySelector(selector) { if (!elements.has(selector)) elements.set(selector, element()); return elements.get(selector); },
     querySelectorAll() { return []; }, createElement: element, body: element(),
   },
   async fetch(url, options) {
+    if (url === '/api/transfers') return { ok: true, async json() { return []; } };
     if (url === '/api/discovery/settings') {
       if (options?.method === 'POST') {
         const input = JSON.parse(options.body).networks;
@@ -52,6 +53,14 @@ vm.runInContext(source, context);
   assert.ok(!elements.get('#devices').innerHTML.includes('这台电脑'));
   assert.ok(elements.get('#files').innerHTML.includes(longName));
   assert.ok(elements.get('#files').innerHTML.includes('class="file-info"'));
+  await vm.runInContext('loadTransfers();', context);
+  vm.runInContext("remoteTransfers = [{ id: 'receive-1', direction: 'receive', name: '接收 文件.bin', size: 200, received: 50, status: 'receiving', startedAt: 1 }]; renderTransfers();", context);
+  assert.ok(elements.get('#transfers').innerHTML.includes('正在接收：接收 文件.bin'));
+  assert.ok(elements.get('#transfers').innerHTML.includes('25%'));
+  assert.ok(elements.get('#transfers').innerHTML.includes('aria-valuenow="25"'));
+  vm.runInContext("remoteTransfers = []; localTransfers.set('send-1', { id: 'send-1', direction: 'send', name: '发送.bin', size: 100, received: 100, status: 'done', startedAt: 2 }); renderTransfers();", context);
+  assert.ok(elements.get('#transfers').innerHTML.includes('已完成发送：发送.bin'));
+  assert.ok(fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8').includes('文件与传输'));
   await timers[timers.length - 1]();
   const css = fs.readFileSync(path.join(__dirname, 'style.css'), 'utf8');
   assert.ok(css.includes('overflow-wrap:anywhere'));

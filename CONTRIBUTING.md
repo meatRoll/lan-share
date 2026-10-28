@@ -42,7 +42,7 @@ node web/discovery-networks.test.js
 node web/qr.test.js
 ```
 
-测试分别覆盖版本矩阵、前端状态与布局规则、TCP 接收协议、UDP 发现、CIDR 多网段配置及本地二维码矩阵生成（校验、重叠去重、自身地址排除和取消）。Android 的 `DiscoveryNetworksTest` 可通过 `:app:testPhoneReleaseUnitTest`、`:app:testTvLegacyReleaseUnitTest`、`:app:testTvModernReleaseUnitTest` 执行；CI 在打包前运行对应平台测试。UI 测试不是浏览器截图验收，协议测试也不能代替真实网络、存储和安装器测试；发布前另按正式清单验收。
+测试分别覆盖版本矩阵、前端传输进度与布局规则、TCP 接收协议及实时进度、UDP 发现、CIDR 多网段配置及本地二维码矩阵生成（校验、重叠去重、自身地址排除和取消）。Android 的 `DiscoveryNetworksTest` 可通过 `:app:testPhoneReleaseUnitTest`、`:app:testTvLegacyReleaseUnitTest`、`:app:testTvModernReleaseUnitTest` 执行；CI 在打包前运行对应平台测试。UI 测试不是浏览器截图验收，协议测试也不能代替真实网络、存储和安装器测试；发布前另按正式清单验收。
 
 ## Android 源码编译
 

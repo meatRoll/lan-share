@@ -13,6 +13,7 @@ window.addEventListener('unhandledrejection', event => reportClientLog('ERROR', 
 const $ = (selector) => document.querySelector(selector);
 const devices = $("#devices");
 const files = $("#files");
+const transfers = $("#transfers");
 const status = $("#status");
 const picker = $("#picker");
 const drop = $("#drop");
@@ -39,6 +40,116 @@ function escapeHtml(value) {
     '"': "&quot;",
     "'": "&#39;",
   })[character]);
+}
+
+let localTransfers = new Map();
+let remoteTransfers = [];
+let transferRenderTimer = null;
+let transferRenderKey = null;
+let transferLoadError = null;
+
+function transferLabel(transfer) {
+  const sending = transfer.direction === 'send';
+  if (transfer.status === 'failed') return `${sending ? '发送' : '接收'}失败：${transfer.name}`;
+  if (transfer.status === 'done') return `已完成${sending ? '发送' : '接收'}：${transfer.name}`;
+  if (transfer.status === 'saving') return `正在保存：${transfer.name}`;
+  return `${sending ? '正在发送' : '正在接收'}：${transfer.name}`;
+}
+
+function transferPercent(transfer) {
+  if (transfer.status === 'done') return 100;
+  const size = Number(transfer.size);
+  if (size === 0) return 100;
+  if (!Number.isFinite(size) || size < 0) return null;
+  const received = Number(transfer.received) || 0;
+  return Math.max(0, Math.min(100, Math.floor(received * 100 / size)));
+}
+
+function transferDetail(transfer, percent) {
+  if (transfer.status === 'failed') return escapeHtml(transfer.error || '传输失败');
+  if (transfer.status === 'done') return '已完成';
+  const received = Number(transfer.received) || 0;
+  const size = Number(transfer.size);
+  if (size === 0) return '0 B';
+  if (!Number.isFinite(size) || size < 0) return `${formatSize(received)} · 大小未知`;
+  return `${formatSize(received)} / ${formatSize(size)} · ${percent}%`;
+}
+
+function renderTransfers() {
+  const all = [...remoteTransfers, ...localTransfers.values()].sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
+  const key = JSON.stringify(all.map(({ id, status, received }) => ({ id, status, received })));
+  if (key === transferRenderKey) return;
+  transferRenderKey = key;
+  transfers.innerHTML = all.map((transfer) => {
+    const percent = transferPercent(transfer);
+    const width = percent === null ? 100 : percent;
+    const progressClass = percent === null ? ' unknown' : '';
+    const valueAttribute = percent === null ? '' : ` aria-valuenow="${percent}"`;
+    return `
+      <div class="transfer${transfer.status === 'failed' ? ' failed' : ''}">
+        <div class="transfer-head">
+          <span class="transfer-name">${escapeHtml(transferLabel(transfer))}</span>
+          <span class="transfer-meta">${transferDetail(transfer, percent)}</span>
+        </div>
+        <div class="progress${progressClass}" role="progressbar" aria-label="${escapeHtml(transfer.name)}传输进度" aria-valuemin="0" aria-valuemax="100"${valueAttribute}>
+          <span style="width:${width}%"></span>
+        </div>
+      </div>`;
+  }).join("");
+}
+
+function scheduleTransferRender() {
+  if (transferRenderTimer) return;
+  transferRenderTimer = setTimeout(() => {
+    transferRenderTimer = null;
+    renderTransfers();
+  }, 100);
+}
+
+function addLocalTransfer(file) {
+  const id = `send-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  localTransfers.set(id, {
+    id, direction: 'send', name: file.name, size: file.size, received: 0, status: 'sending', startedAt: Date.now(),
+  });
+  scheduleTransferRender();
+  return id;
+}
+
+function updateLocalTransfer(id, patch) {
+  const transfer = localTransfers.get(id);
+  if (!transfer) return;
+  Object.assign(transfer, patch);
+  scheduleTransferRender();
+}
+
+function finishLocalTransfer(id, status, error) {
+  const transfer = localTransfers.get(id);
+  if (!transfer) return;
+  transfer.status = status;
+  if (status === 'done') transfer.received = transfer.size;
+  if (error) transfer.error = error;
+  scheduleTransferRender();
+  setTimeout(() => {
+    localTransfers.delete(id);
+    scheduleTransferRender();
+  }, status === 'done' ? 1500 : 8000);
+}
+
+async function loadTransfers() {
+  try {
+    const response = await fetch('/api/transfers');
+    if (!response.ok) throw new Error('无法读取传输进度');
+    const next = await response.json();
+    transferLoadError = null;
+    const hadActive = remoteTransfers.some(transfer => transfer.status === 'receiving' || transfer.status === 'saving');
+    remoteTransfers = next.map(transfer => ({ ...transfer, direction: 'receive' }));
+    const hasActive = remoteTransfers.some(transfer => transfer.status === 'receiving' || transfer.status === 'saving');
+    if (hadActive && !hasActive) loadFiles();
+    scheduleTransferRender();
+  } catch (error) {
+    if (transferLoadError !== error.message) reportClientLog('ERROR', 'load transfers failed', error);
+    transferLoadError = error.message;
+  }
 }
 
 async function loadDevices() {
@@ -82,11 +193,6 @@ async function loadDevices() {
   }
 }
 
-async function requestDevice(path, options = {}) {
-  if (!target) throw new Error("请先选择目标设备");
-  return fetch(`/device/${encodeURIComponent(target.id)}${path}`, options);
-}
-
 async function loadFiles() {
   try {
     const response = await fetch("/api/desktop/files");
@@ -122,24 +228,66 @@ async function loadFiles() {
 async function upload(fileList) {
   try {
     if (!target) throw new Error("请先选择目标设备");
-
-    for (const file of fileList) {
-      status.textContent = `正在上传 ${file.name}…`;
-      const response = await requestDevice("/upload", {
-            method: "POST",
-            headers: { "X-Filename": encodeURIComponent(file.name) },
-            body: file,
-          });
-
-      if (!response.ok) throw new Error("上传失败");
+    const selectedFiles = Array.from(fileList);
+    for (let index = 0; index < selectedFiles.length; index++) {
+      const file = selectedFiles[index];
+      status.textContent = `正在发送 ${file.name}（${index + 1}/${selectedFiles.length}）…`;
+      await uploadFile(file);
     }
-
-    status.textContent = "上传完成";
+    status.textContent = selectedFiles.length > 1 ? `已发送 ${selectedFiles.length} 个文件` : "发送完成";
     await loadFiles();
   } catch (error) {
     reportClientLog('ERROR', 'upload failed', error);
     status.textContent = error.message;
   }
+}
+
+function uploadFile(file) {
+  const device = target;
+  if (!device) return Promise.reject(new Error("请先选择目标设备"));
+  const id = addLocalTransfer(file);
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `/device/${encodeURIComponent(device.id)}/upload`);
+    xhr.setRequestHeader("X-Filename", encodeURIComponent(file.name));
+    xhr.upload.onprogress = (event) => {
+      const size = event.lengthComputable ? event.total : file.size;
+      updateLocalTransfer(id, { received: event.loaded, size });
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        finishLocalTransfer(id, 'done');
+        resolve();
+        return;
+      }
+      const message = uploadResponseError(xhr);
+      finishLocalTransfer(id, 'failed', message);
+      reject(new Error(message));
+    };
+    xhr.onerror = () => {
+      const message = "发送失败，请检查设备连接";
+      finishLocalTransfer(id, 'failed', message);
+      reject(new Error(message));
+    };
+    xhr.onabort = () => {
+      const message = "发送已取消";
+      finishLocalTransfer(id, 'failed', message);
+      reject(new Error(message));
+    };
+    xhr.send(file);
+  });
+}
+
+function uploadResponseError(xhr) {
+  const text = (xhr.responseText || '').trim();
+  if (text) {
+    try {
+      const result = JSON.parse(text);
+      if (result.error) return result.error;
+    } catch (_) { }
+    if (text.length <= 120) return text;
+  }
+  return `发送失败（${xhr.status}）`;
 }
 
 let currentNetworks = [];
@@ -259,9 +407,10 @@ async function decideReceive(accept) {
   try {
     const response = await fetch(`/api/receives/${encodeURIComponent(shownReceive)}/${accept ? 'accept' : 'reject'}`, { method: 'POST' });
     if (!response.ok) throw new Error('接收请求已过期或处理失败');
-    status.textContent = accept ? '已同意接收，等待文件保存完成' : '已拒绝接收';
+    status.textContent = accept ? '已同意接收，进度见“文件与传输”' : '已拒绝接收';
     receiveDialog.close();
     shownReceive = null;
+    if (accept) loadTransfers();
   } catch (error) {
     status.textContent = error.message;
   } finally { decidingReceive = false; }
@@ -292,5 +441,7 @@ async function checkReceives() {
 loadDevices();
 loadFiles();
 checkReceives();
+loadTransfers();
 setInterval(checkReceives, 1000);
+setInterval(loadTransfers, 1000);
 setInterval(() => { loadDevices(); loadFiles(); }, 3000);

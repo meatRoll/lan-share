@@ -31,12 +31,15 @@ class LanShareService(private val context: Context, private val listener: Listen
     interface Listener {
         fun onDevicesChanged(devices: List<Device>)
         fun onIncoming(request: IncomingRequest): Boolean
-        fun onTransfer(message: String, progress: Int)
+        fun onTransfer(progress: TransferProgress)
         fun onError(message: String)
         fun onApkReceived(file: File)
         fun onWebFileReceived(file: File)
         fun onFileReceived(file: File)
     }
+
+    enum class TransferDirection { SEND, RECEIVE }
+    data class TransferProgress(val direction: TransferDirection, val name: String, val progress: Int, val done: Boolean = false)
 
     data class Device(val id: String, val name: String, val address: InetAddress, val port: Int)
     data class IncomingRequest(val name: String, val size: Long, val address: String)
@@ -162,44 +165,35 @@ class LanShareService(private val context: Context, private val listener: Listen
 
     private fun sendStream(input: InputStream, name: String, size: Long, device: Device) {
         Socket().use { socket ->
+            LanNetwork.bind(socket, context, device.address)
             socket.connect(InetSocketAddress(device.address, device.port), 5_000)
             socket.soTimeout = 30_000
+            val safeName = FileNames.safe(name)
+            listener.onTransfer(TransferProgress(TransferDirection.SEND, safeName, 0))
             val out = BufferedOutputStream(socket.getOutputStream())
             val reader = BufferedReader(InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8))
-            out.write("$MAGIC|FILE|${FileNames.safe(name)}|$size\n".toByteArray())
+            out.write("$MAGIC|FILE|$safeName|$size\n".toByteArray())
             out.flush()
-            Logcat.d("send", "waiting for ACCEPT from ${device.address.hostAddress}:${device.port}; file=$name; size=$size")
+            Logcat.d("send", "waiting for ACCEPT from ${device.address.hostAddress}:${device.port}; file=$safeName; size=$size")
             if (reader.readLine() != "ACCEPT") throw IOException("对方拒绝接收")
             val buffer = ByteArray(64 * 1024)
             var sent = 0L
             var count: Int
             while (input.read(buffer).also { count = it } > 0) {
                 out.write(buffer, 0, count); sent += count
-                if (size > 0) listener.onTransfer("正在发送 $name", (sent * 100 / size).toInt())
+                if (size > 0) listener.onTransfer(TransferProgress(TransferDirection.SEND, safeName, (sent * 100 / size).toInt()))
             }
             out.flush()
             socket.shutdownOutput()
             if (sent != size) throw IOException("文件长度不一致：$sent/$size")
             if (reader.readLine() != "DONE") throw IOException("接收端未确认保存完成")
-            Logcat.d("send", "receiver saved $name: $sent bytes")
-            listener.onTransfer("已发送 $name", 100)
+            Logcat.d("send", "receiver saved $safeName: $sent bytes")
+            listener.onTransfer(TransferProgress(TransferDirection.SEND, safeName, 100, true))
         }
     }
 
     private fun bindLanSocket(socket: DatagramSocket) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
-        try {
-            val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
-            val network = manager.allNetworks.firstOrNull { candidate ->
-                val capabilities = manager.getNetworkCapabilities(candidate)
-                capabilities?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) == true ||
-                    capabilities?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) == true
-            }
-            network?.bindSocket(socket)
-            if (network != null) Logcat.d("discovery", "UDP socket bound to LAN network=$network")
-        } catch (error: Exception) {
-            Logcat.d("discovery", "could not bind UDP socket to LAN network: ${error.message}")
-        }
+        LanNetwork.bind(socket, context)
     }
 
     private fun isTransientNetworkError(error: Throwable): Boolean {
@@ -389,9 +383,10 @@ class LanShareService(private val context: Context, private val listener: Listen
                 out.write(if (accepted) "ACCEPT\n" else "REJECT\n"); out.flush()
                 if (!accepted) return
                 Logcat.d("receive", "accepted $fileName")
+                listener.onTransfer(TransferProgress(TransferDirection.RECEIVE, fileName, 0))
                 val saved = saveIncoming(input, fileName, size)
                 out.write("DONE\n"); out.flush()
-                listener.onTransfer("已接收 $fileName", 100)
+                listener.onTransfer(TransferProgress(TransferDirection.RECEIVE, fileName, 100, true))
                 listener.onFileReceived(saved)
                 if (fileName.lowercase().endsWith(".apk")) listener.onApkReceived(saved)
             }
@@ -425,7 +420,7 @@ class LanShareService(private val context: Context, private val listener: Listen
                 n = input.read(buffer, 0, if (size < 0) buffer.size else minOf(buffer.size.toLong(), size - total).toInt())
                 if (n < 0) { if (size >= 0) throw EOFException("文件不完整：$total/$size"); break }
                 out.write(buffer, 0, n); total += n
-                if (size > 0) listener.onTransfer("正在接收 $name", (total * 100 / size).toInt())
+                if (size > 0) listener.onTransfer(TransferProgress(TransferDirection.RECEIVE, name, (total * 100 / size).toInt()))
             }
             Logcat.d("receive", "received $name: $total bytes")
         }

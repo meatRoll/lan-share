@@ -67,15 +67,19 @@ class HttpGateway(private val context: Context, private val deviceName: String, 
         val temporary = storage.temporaryFile
         val name = file.name
         Logcat.d("web upload", "receiving $name; requested=$requestedName; size=$length; storage=${storage.kind}; final=${file.absolutePath}; temporary=${temporary.absolutePath}")
+        listener.onTransfer(LanShareService.TransferProgress(LanShareService.TransferDirection.RECEIVE, name, 0))
         try {
             FileOutputStream(temporary).use { out ->
                 val buffer = ByteArray(64 * 1024)
                 var left = length
+                var received = 0L
                 while (left > 0) {
                     val count = input.read(buffer, 0, minOf(buffer.size.toLong(), left).toInt())
                     if (count < 0) throw EOFException()
                     out.write(buffer, 0, count)
                     left -= count
+                    received += count
+                    if (length > 0) listener.onTransfer(LanShareService.TransferProgress(LanShareService.TransferDirection.RECEIVE, name, (received * 100 / length).toInt()))
                 }
                 out.fd.sync()
             }
@@ -83,11 +87,13 @@ class HttpGateway(private val context: Context, private val deviceName: String, 
         } catch (error: Exception) {
             temporary.delete()
             Logcat.e("web upload storage=${storage.kind}", error)
+            listener.onError("接收失败：${error.message ?: "未知错误"}")
             throw error
         }
         Logcat.d("web upload", "saved $name: ${file.length()} bytes; storage=${storage.kind}")
         synchronized(files) { files.removeAll { it.name == name }; files.add(file) }
         if (name.lowercase().endsWith(".apk")) listener.onApkReceived(file)
+        listener.onTransfer(LanShareService.TransferProgress(LanShareService.TransferDirection.RECEIVE, name, 100, true))
         listener.onWebFileReceived(file)
         listener.onFileReceived(file)
         respond(socket, 201, "{\"name\":${json(name)},\"size\":${file.length()}}", "application/json")

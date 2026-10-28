@@ -14,6 +14,9 @@ import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.content.res.ColorStateList
 import android.content.pm.PackageManager
 import android.provider.Settings
 import java.io.File
@@ -29,6 +32,13 @@ class MainActivity : Activity(), LanShareService.Listener {
     private val muted = Color.rgb(157, 166, 149)
     private lateinit var content: LinearLayout
     private lateinit var title: TextView
+    private lateinit var transferSection: LinearLayout
+    private lateinit var transferLabel: TextView
+    private lateinit var transferDetail: TextView
+    private lateinit var transferBar: ProgressBar
+    private var activeTransfer: LanShareService.TransferProgress? = null
+    private val transferHandler = Handler(Looper.getMainLooper())
+    private var transferClearTask: Runnable? = null
     private lateinit var service: LanShareService
     private var devices: List<LanShareService.Device> = emptyList()
     private var selected: LanShareService.Device? = null
@@ -70,7 +80,11 @@ class MainActivity : Activity(), LanShareService.Listener {
         if (intent != null && acceptShareIntent(intent)) showHome()
     }
 
-    override fun onDestroy() { service.stop(); super.onDestroy() }
+    override fun onDestroy() {
+        transferClearTask?.let(transferHandler::removeCallbacks)
+        service.stop()
+        super.onDestroy()
+    }
 
     private fun acceptShareIntent(intent: Intent): Boolean {
         val action = intent.action
@@ -155,8 +169,31 @@ class MainActivity : Activity(), LanShareService.Listener {
         return result
     }
 
-    override fun onTransfer(message: String, progress: Int) { runOnUiThread { status = "$message  $progress%"; showHome() } }
-    override fun onError(message: String) { runOnUiThread { status = message; Toast.makeText(this, message, Toast.LENGTH_LONG).show(); showHome() } }
+    override fun onTransfer(progress: LanShareService.TransferProgress) {
+        runOnUiThread {
+            activeTransfer = progress
+            transferClearTask?.let(transferHandler::removeCallbacks)
+            transferClearTask = null
+            showTransfer(progress)
+            if (progress.done) {
+                transferClearTask = Runnable {
+                    if (activeTransfer == progress) activeTransfer = null
+                    if (::transferSection.isInitialized) transferSection.visibility = android.view.View.GONE
+                }.also { transferHandler.postDelayed(it, 4_000) }
+            }
+        }
+    }
+    override fun onError(message: String) {
+        runOnUiThread {
+            transferClearTask?.let(transferHandler::removeCallbacks)
+            transferClearTask = null
+            activeTransfer = null
+            if (::transferSection.isInitialized) transferSection.visibility = android.view.View.GONE
+            status = message
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+            showHome()
+        }
+    }
 
     override fun onApkReceived(file: File) {
         // Receiving only saves the file. APK actions are available from the received-files list.
@@ -365,6 +402,7 @@ class MainActivity : Activity(), LanShareService.Listener {
 
     private fun showHome() {
         val root = baseLayout(); title.text = "局域网传输"
+        content.addView(transferCard(), LinearLayout.LayoutParams(-1, -2).apply { topMargin = 10.dp(); bottomMargin = 10.dp() })
         content.addView(label("我的设备", 20))
         content.addView(rowCard(android.os.Build.MODEL ?: "Android", "在线 · 等待附近设备连接", "本机", lime, false))
         content.addView(label("附近设备", 24))
@@ -389,6 +427,36 @@ class MainActivity : Activity(), LanShareService.Listener {
             content.addView(item)
         }
         setContentView(root)
+    }
+
+    private fun transferCard(): LinearLayout {
+        transferLabel = TextView(this).apply { setTextColor(Color.WHITE); textSize = 15f; typeface = android.graphics.Typeface.DEFAULT_BOLD }
+        transferDetail = TextView(this).apply { setTextColor(muted); textSize = 12f; setPadding(0, 4, 0, 8) }
+        transferBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            progressTintList = ColorStateList.valueOf(lime)
+            progressBackgroundTintList = ColorStateList.valueOf(Color.rgb(58, 66, 52))
+        }
+        transferSection = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(14, 12, 14, 12)
+            background = rounded(panel, 14)
+            addView(transferLabel)
+            addView(transferDetail)
+            addView(transferBar, LinearLayout.LayoutParams(-1, 8.dp()))
+            visibility = android.view.View.GONE
+        }
+        activeTransfer?.let(::showTransfer)
+        return transferSection
+    }
+
+    private fun showTransfer(progress: LanShareService.TransferProgress) {
+        if (!::transferSection.isInitialized) return
+        val direction = if (progress.direction == LanShareService.TransferDirection.SEND) "发送" else "接收"
+        transferLabel.text = if (progress.done) "已完成$direction：${progress.name}" else "正在$direction：${progress.name}"
+        transferDetail.text = if (progress.done) "100%" else "${progress.progress.coerceIn(0, 100)}%"
+        transferBar.progress = progress.progress.coerceIn(0, 100)
+        transferSection.visibility = android.view.View.VISIBLE
     }
 
     private fun baseLayout(): LinearLayout {

@@ -1,13 +1,18 @@
 package com.lanshare.app
 
 import android.app.AlertDialog
+import android.app.Dialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.GradientDrawable
 import android.text.InputType
 import android.view.Gravity
+import android.view.View
 import android.widget.*
 
 object DiscoveryNetworkSettings {
@@ -134,25 +139,78 @@ object DiscoveryNetworkSettings {
             text = "显示填写网段的二维码"
             setOnClickListener { showQr(context, input.text.toString(), tv) }
         })
-        val dialog = AlertDialog.Builder(context).setTitle("发现网段")
-            .setView(ScrollView(context).apply { addView(box) })
-            .setNegativeButton("取消", null).setPositiveButton("保存并搜索", null).create()
-        dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                try {
-                    val canonical = DiscoveryNetworks.parse(input.text.toString()).joinToString("\n") { it.cidr }
-                    prefs.edit().putString("discovery_networks", canonical).apply()
-                    service.updateDiscoveryNetworks()
-                    Toast.makeText(context, "发现网段已保存，正在搜索", Toast.LENGTH_SHORT).show()
-                    dialog.dismiss()
-                } catch (error: IllegalArgumentException) {
-                    input.error = error.message?.replace("\n", " · ")
-                    Toast.makeText(context, error.message, Toast.LENGTH_LONG).show()
-                    input.requestFocus()
-                }
+        fun save(dialog: android.content.DialogInterface) {
+            try {
+                val canonical = DiscoveryNetworks.parse(input.text.toString()).joinToString("\n") { it.cidr }
+                prefs.edit().putString("discovery_networks", canonical).apply()
+                service.updateDiscoveryNetworks()
+                Toast.makeText(context, "发现网段已保存，正在搜索", Toast.LENGTH_SHORT).show()
+                dialog.dismiss()
+            } catch (error: IllegalArgumentException) {
+                input.error = error.message?.replace("\n", " · ")
+                Toast.makeText(context, error.message, Toast.LENGTH_LONG).show()
+                input.requestFocus()
             }
-            if (tv) dialog.getButton(AlertDialog.BUTTON_POSITIVE).requestFocus()
         }
+        if (!tv) {
+            val dialog = AlertDialog.Builder(context).setTitle("发现网段")
+                .setView(ScrollView(context).apply { addView(box) })
+                .setNegativeButton("取消", null).setPositiveButton("保存并搜索", null).create()
+            dialog.setOnShowListener {
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { save(dialog) }
+            }
+            dialog.show()
+            return
+        }
+        val dialog = Dialog(context)
+        val scroll = ScrollView(context).apply {
+            isFocusable = true
+            isFocusableInTouchMode = true
+            isFillViewport = true
+            isVerticalScrollBarEnabled = true
+            scrollBarStyle = View.SCROLLBARS_INSIDE_INSET
+            addView(box)
+        }
+        val title = TextView(context).apply { text = "发现网段"; textSize = 24f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE) }
+        val hint = TextView(context).apply { text = "使用方向键上下浏览，保存按钮始终可见"; textSize = 13f; setTextColor(Color.rgb(164, 174, 155)); setPadding(0, 6, 0, 10) }
+        val root = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(36, 24, 36, 20)
+            background = GradientDrawable().apply { setColor(Color.rgb(28, 33, 26)); cornerRadius = 18f }
+            addView(title)
+            addView(hint)
+            addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        }
+        val actions = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, 16, 0, 0) }
+        val cancel = tvButton(context, "取消", Color.rgb(53, 62, 46)) { dialog.dismiss() }
+        val saveButton = tvButton(context, "保存并搜索", lime) { save(dialog) }
+        actions.addView(cancel, LinearLayout.LayoutParams(0, 58, 1f))
+        actions.addView(saveButton, LinearLayout.LayoutParams(0, 58, 1f).apply { marginStart = 12 })
+        root.addView(actions, LinearLayout.LayoutParams(-1, 58))
+        dialog.setContentView(root)
+        dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
         dialog.show()
+        val metrics = context.resources.displayMetrics
+        dialog.window?.setLayout((metrics.widthPixels * 0.88f).toInt(), (metrics.heightPixels * 0.9f).toInt())
+        saveButton.post { saveButton.requestFocus() }
+    }
+
+    private fun tvButton(context: Context, label: String, color: Int, action: () -> Unit): TextView = TextView(context).apply {
+        text = label
+        gravity = Gravity.CENTER
+        textSize = 14f
+        typeface = Typeface.DEFAULT_BOLD
+        setTextColor(if (color == lime) Color.rgb(13, 15, 12) else Color.WHITE)
+        background = GradientDrawable().apply { setColor(color); cornerRadius = 10f }
+        isFocusable = true
+        isFocusableInTouchMode = true
+        isClickable = true
+        setPadding(8, 10, 8, 10)
+        minimumHeight = 58
+        setOnClickListener { action() }
+        setOnFocusChangeListener { view, focused ->
+            view.background = GradientDrawable().apply { setColor(if (focused) lime else color); cornerRadius = 10f }
+            (view as TextView).setTextColor(if (focused || color == lime) Color.rgb(13, 15, 12) else Color.WHITE)
+        }
     }
 }

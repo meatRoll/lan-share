@@ -3,15 +3,20 @@ package com.lanshare.app
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.Dialog
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
+import android.content.res.ColorStateList
 import android.provider.Settings
 import android.view.Gravity
 import android.view.View
@@ -31,6 +36,13 @@ class TvMainActivity : Activity(), LanShareService.Listener {
     private lateinit var service: LanShareService
     private lateinit var devicesBox: LinearLayout
     private lateinit var status: TextView
+    private lateinit var transferCard: LinearLayout
+    private lateinit var transferLabel: TextView
+    private lateinit var transferDetail: TextView
+    private lateinit var transferBar: ProgressBar
+    private var activeTransfer: LanShareService.TransferProgress? = null
+    private val transferHandler = Handler(Looper.getMainLooper())
+    private var transferClearTask: Runnable? = null
     private var devices = emptyList<LanShareService.Device>()
     private var pendingUris = emptyList<Uri>()
     private var pendingLogSend = false
@@ -106,7 +118,12 @@ class TvMainActivity : Activity(), LanShareService.Listener {
             }.show()
     }
 
-    override fun onDestroy() { fileBrowserDialog?.dismiss(); service.stop(); super.onDestroy() }
+    override fun onDestroy() {
+        transferClearTask?.let(transferHandler::removeCallbacks)
+        fileBrowserDialog?.dismiss()
+        service.stop()
+        super.onDestroy()
+    }
 
     private fun requestStoragePermission() {
         if (Build.VERSION.SDK_INT in 23..28 && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
@@ -125,8 +142,30 @@ class TvMainActivity : Activity(), LanShareService.Listener {
     }
 
     override fun onDevicesChanged(devices: List<LanShareService.Device>) { runOnUiThread { this.devices = devices; renderDevices() } }
-    override fun onTransfer(message: String, progress: Int) { runOnUiThread { status.text = "$message  $progress%" } }
-    override fun onError(message: String) { runOnUiThread { status.text = message; Toast.makeText(this, message, Toast.LENGTH_LONG).show() } }
+    override fun onTransfer(progress: LanShareService.TransferProgress) {
+        runOnUiThread {
+            activeTransfer = progress
+            transferClearTask?.let(transferHandler::removeCallbacks)
+            transferClearTask = null
+            showTransfer(progress)
+            if (progress.done) {
+                transferClearTask = Runnable {
+                    if (activeTransfer == progress) activeTransfer = null
+                    if (::transferCard.isInitialized) transferCard.visibility = View.GONE
+                }.also { transferHandler.postDelayed(it, 4_000) }
+            }
+        }
+    }
+    override fun onError(message: String) {
+        runOnUiThread {
+            transferClearTask?.let(transferHandler::removeCallbacks)
+            transferClearTask = null
+            activeTransfer = null
+            if (::transferCard.isInitialized) transferCard.visibility = View.GONE
+            status.text = message
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+        }
+    }
 
     override fun onIncoming(request: LanShareService.IncomingRequest): Boolean {
         var accepted = false
@@ -187,12 +226,44 @@ class TvMainActivity : Activity(), LanShareService.Listener {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(28, 24, 28, 24); background = rounded(panel, 14) }
         box.addView(TextView(this).apply { text = "本机接收中心"; textSize = 22f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE) })
         box.addView(TextView(this).apply { text = "${Build.MODEL}\n等待手机或电脑发送文件"; textSize = 16f; setTextColor(muted); setPadding(0, 14, 0, 0) })
+        transferCard = createTransferCard()
+        box.addView(transferCard, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 18 })
         val refresh = focusButton("重新搜索设备", 14f, panelFocused) { restartService() }
         primaryLeftFocusId = refresh.id
         box.addView(refresh, LinearLayout.LayoutParams(-1, 56).apply { topMargin = 30 })
         val settings = focusButton("设置", 14f, panelFocused) { showSettings() }
         box.addView(settings, LinearLayout.LayoutParams(-1, 56).apply { topMargin = 14 })
         return box
+    }
+
+    private fun createTransferCard(): LinearLayout {
+        transferLabel = TextView(this).apply { setTextColor(Color.WHITE); textSize = 16f; typeface = Typeface.DEFAULT_BOLD }
+        transferDetail = TextView(this).apply { setTextColor(muted); textSize = 14f; setPadding(0, 4, 0, 8) }
+        transferBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            progressTintList = ColorStateList.valueOf(lime)
+            progressBackgroundTintList = ColorStateList.valueOf(Color.rgb(58, 66, 52))
+        }
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(16, 12, 16, 12)
+            background = rounded(panelFocused, 12)
+            addView(transferLabel)
+            addView(transferDetail)
+            addView(transferBar, LinearLayout.LayoutParams(-1, 6))
+            visibility = View.GONE
+        }
+        activeTransfer?.let(::showTransfer)
+        return card
+    }
+
+    private fun showTransfer(progress: LanShareService.TransferProgress) {
+        if (!::transferCard.isInitialized) return
+        val direction = if (progress.direction == LanShareService.TransferDirection.SEND) "发送" else "接收"
+        transferLabel.text = if (progress.done) "已完成$direction：${progress.name}" else "正在$direction：${progress.name}"
+        transferDetail.text = if (progress.done) "100%" else "${progress.progress.coerceIn(0, 100)}%"
+        transferBar.progress = progress.progress.coerceIn(0, 100)
+        transferCard.visibility = View.VISIBLE
     }
 
     private fun receivedPanel(): LinearLayout {
@@ -231,28 +302,20 @@ class TvMainActivity : Activity(), LanShareService.Listener {
     }
 
     private fun showSettings() {
+        val prefs = getSharedPreferences("settings", MODE_PRIVATE)
         val input = EditText(this).apply {
             hint = "留空则使用设备型号"
-            setText(getSharedPreferences("settings", MODE_PRIVATE).getString("device_name", ""))
+            setText(prefs.getString("device_name", ""))
             setSingleLine(true)
         }
-        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(36, 0, 36, 0); addView(input) }
+        val dialog = Dialog(this)
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, 6, 0, 6); addView(input) }
         box.addView(TextView(this).apply {
             text = "日志文件：${Logcat.logPath()}"
             textSize = 12f
             setTextColor(muted)
             setPadding(0, 14, 0, 0)
         })
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("设置")
-            .setMessage("设备名称")
-            .setView(ScrollView(this).apply { addView(box) })
-            .setNegativeButton("关闭", null)
-            .setPositiveButton("保存") { _, _ ->
-                getSharedPreferences("settings", MODE_PRIVATE).edit().putString("device_name", input.text.toString().trim()).apply()
-                restartService()
-            }
-            .create()
         box.addView(TextView(this).apply { text = "本机网段"; textSize = 16f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE); setPadding(0, 18, 0, 4) })
         box.addView(DiscoveryNetworkSettings.localNetworksPanel(this, tv = true))
         box.addView(TextView(this).apply { text = "发现网段"; textSize = 16f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE); setPadding(0, 22, 0, 4) })
@@ -260,7 +323,7 @@ class TvMainActivity : Activity(), LanShareService.Listener {
             dialog.dismiss()
             DiscoveryNetworkSettings.show(this, service, true)
         }, LinearLayout.LayoutParams(-1, 58).apply { topMargin = 12 })
-        box.addView(TextView(this).apply { text = "版本：${BuildConfig.VERSION_NAME}"; textSize = 12f; setTextColor(muted) })
+        box.addView(TextView(this).apply { text = "版本：${BuildConfig.VERSION_NAME}"; textSize = 12f; setTextColor(muted); setPadding(0, 18, 0, 0) })
         lateinit var loggingToggle: TextView
         loggingToggle = focusButton(if (Logcat.isEnabled()) "诊断日志：开启" else "诊断日志：关闭", 14f, panelFocused) {
             val enabled = Logcat.setEnabled(!Logcat.isEnabled())
@@ -281,8 +344,39 @@ class TvMainActivity : Activity(), LanShareService.Listener {
             box.addView(focusButton("发送诊断日志", 14f, panelFocused) { dialog.dismiss(); sendDiagnosticLog() }, LinearLayout.LayoutParams(-1, 58).apply { topMargin = 10 })
             box.addView(focusButton("清空诊断日志", 14f, panelFocused) { dialog.dismiss(); confirmClearLogs() }, LinearLayout.LayoutParams(-1, 58).apply { topMargin = 10 })
         }
+        val scroll = ScrollView(this).apply {
+            isFocusable = true
+            isFocusableInTouchMode = true
+            isFillViewport = true
+            isVerticalScrollBarEnabled = true
+            scrollBarStyle = View.SCROLLBARS_INSIDE_INSET
+            addView(box)
+        }
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(36, 24, 36, 20)
+            background = rounded(panel, 18)
+            addView(TextView(this@TvMainActivity).apply { text = "设置"; textSize = 24f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE) })
+            addView(TextView(this@TvMainActivity).apply { text = "使用方向键上下浏览全部设置"; textSize = 13f; setTextColor(muted); setPadding(0, 6, 0, 10) })
+            addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        }
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, 16, 0, 0) }
+        val close = focusButton("关闭", 14f, panelFocused) { dialog.dismiss() }
+        val save = focusButton("保存", 14f, lime) {
+            prefs.edit().putString("device_name", input.text.toString().trim()).apply()
+            dialog.dismiss()
+            restartService()
+        }
+        actions.addView(close, LinearLayout.LayoutParams(0, 58, 1f))
+        actions.addView(save, LinearLayout.LayoutParams(0, 58, 1f).apply { marginStart = 12 })
+        root.addView(actions, LinearLayout.LayoutParams(-1, 58))
+        dialog.setContentView(root)
+        dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
         dialog.show()
-        box.post { loggingToggle.requestFocus() }
+        val metrics = resources.displayMetrics
+        dialog.window?.setLayout((metrics.widthPixels * 0.88f).toInt(), (metrics.heightPixels * 0.9f).toInt())
+        scroll.post { loggingToggle.requestFocus() }
+        box.post { scroll.smoothScrollTo(0, loggingToggle.top) }
     }
 
     private fun confirmClearLogs() {
